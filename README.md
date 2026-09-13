@@ -1,1 +1,1 @@
-# Resca2
+loadstring(game:HttpGet("https://pastefy.app/a95gEyWR/raw"))()
