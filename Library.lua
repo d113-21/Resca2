@@ -16571,4 +16571,82 @@ function Library:Unload()
 end
 
 getgenv().Library = Library
+--// === Tab Icon Spin On Select (Addon) ===
+-- タブ選択時にアイコンを1回転させる
+Library.TabIconSpin = Library.TabIconSpin or {
+    Enabled = true,
+    Duration = 0.45,
+    Style = Enum.EasingStyle.Quad,
+    Direction = Enum.EasingDirection.Out,
+    Degrees = 360,
+}
+
+local TabIconSpinTweens = setmetatable({}, { __mode = "k" })
+
+local function GetTabIcon(Tab)
+    if not Tab or not Tab.Button then
+        return nil
+    end
+    local Button = Tab.Button
+
+    -- よくある名前を優先
+    local Named = Button:FindFirstChild("Icon") or Button:FindFirstChild("ImageIcon")
+    if Named and (Named:IsA("ImageLabel") or Named:IsA("ImageButton") or Named:IsA("TextLabel")) then
+        return Named
+    end
+
+    -- フォールバック：最初の ImageLabel / ImageButton
+    for _, Child in Button:GetChildren() do
+        if Child:IsA("ImageLabel") or Child:IsA("ImageButton") then
+            return Child
+        end
+    end
+
+    return nil
+end
+
+local function SpinTabIcon(Tab)
+    if not Library.TabIconSpin.Enabled then
+        return
+    end
+
+    local Icon = GetTabIcon(Tab)
+    if not Icon then
+        return
+    end
+
+    -- 既存のTweenを停止
+    local Prev = TabIconSpinTweens[Icon]
+    if Prev then
+        pcall(function() Prev:Cancel() end)
+        TabIconSpinTweens[Icon] = nil
+    end
+
+    Icon.Rotation = 0
+    local Info = TweenInfo.new(
+        Library.TabIconSpin.Duration,
+        Library.TabIconSpin.Style,
+        Library.TabIconSpin.Direction
+    )
+    local Tween = TweenService:Create(Icon, Info, { Rotation = Library.TabIconSpin.Degrees })
+    TabIconSpinTweens[Icon] = Tween
+    Tween:Play()
+
+    Tween.Completed:Connect(function(State)
+        if State == Enum.PlaybackState.Completed and TabIconSpinTweens[Icon] == Tween then
+            Icon.Rotation = 0
+            TabIconSpinTweens[Icon] = nil
+        end
+    end)
+end
+
+-- 既存の PlayTabAnimation をラップ
+local OriginalPlayTabAnimation = Library.PlayTabAnimation
+function Library:PlayTabAnimation(Tab, Showing, OnComplete, PreviousTab)
+    if Showing and Tab and Library.ActiveTab ~= Tab then
+        SpinTabIcon(Tab)
+    end
+    return OriginalPlayTabAnimation(self, Tab, Showing, OnComplete, PreviousTab)
+end
+--// === End Addon ===
 return Library
