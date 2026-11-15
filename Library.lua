@@ -16571,125 +16571,115 @@ function Library:Unload()
 end
 
 getgenv().Library = Library
---// === Tab Icon Spin On Select (Addon v3) ===
+--// === Tab Icon Continuous Spin (Addon v4) ===
 Library.TabIconSpin = Library.TabIconSpin or {
     Enabled = true,
-    Duration = 0.45,
-    Style = Enum.EasingStyle.Quad,
+    Duration = 1.2,                       -- 1回転にかかる秒数（小さいほど速い）
+    Style = Enum.EasingStyle.Linear,      -- 等速回転
     Direction = Enum.EasingDirection.Out,
-    Degrees = 360,
-    SkipFirst = false,
+    ActiveOnly = true,                    -- true: 選択中タブのみ / false: 全タブ常時回転
 }
 
-local TabIconSpinTweens = setmetatable({}, { __mode = "k" })
+local ActiveSpins = setmetatable({}, { __mode = "k" })  -- [Icon] = Tween
 
 local function GetTabIcon(Tab)
     if not Tab or not Tab.Button then return nil end
     local Button = Tab.Button
 
-    -- 1) CreateIcon のフォントアイコンは "IconPadding" 子を持つ
     for _, Desc in Button:GetDescendants() do
         if Desc:IsA("TextLabel") and Desc:FindFirstChild("IconPadding") then
             return Desc
         end
     end
-
-    -- 2) ImageLabel / ImageButton
     for _, Desc in Button:GetDescendants() do
         if Desc:IsA("ImageLabel") or Desc:IsA("ImageButton") then
             return Desc
         end
     end
-
-    -- 3) 短い文字列のTextLabel（絵文字を直接入れている場合）
     for _, Desc in Button:GetDescendants() do
         if Desc:IsA("TextLabel") then
-            local T = Desc.Text or ""
-            local Len = utf8.len(T)
+            local Len = utf8.len(Desc.Text or "")
             if Len and Len >= 1 and Len <= 2 then
                 return Desc
             end
         end
     end
-
     return nil
 end
 
-local function SpinIcon(Icon)
+local function StopSpin(Icon)
     if not Icon then return end
-    local Prev = TabIconSpinTweens[Icon]
-    if Prev then pcall(function() Prev:Cancel() end) end
+    local T = ActiveSpins[Icon]
+    if T then
+        pcall(function() T:Cancel() end)
+        ActiveSpins[Icon] = nil
+    end
+    pcall(function() Icon.Rotation = 0 end)
+end
+
+local function StartSpin(Icon)
+    if not Icon or ActiveSpins[Icon] then return end
     Icon.Rotation = 0
     local Info = TweenInfo.new(
         Library.TabIconSpin.Duration,
         Library.TabIconSpin.Style,
-        Library.TabIconSpin.Direction
+        Library.TabIconSpin.Direction,
+        -1                               -- -1 = 無限ループ
     )
-    local Tween = TweenService:Create(Icon, Info, { Rotation = Library.TabIconSpin.Degrees })
-    TabIconSpinTweens[Icon] = Tween
-    Tween:Play()
-    Tween.Completed:Connect(function(State)
-        if State == Enum.PlaybackState.Completed and TabIconSpinTweens[Icon] == Tween then
-            Icon.Rotation = 0
-            TabIconSpinTweens[Icon] = nil
-        end
-    end)
+    local T = TweenService:Create(Icon, Info, { Rotation = 360 })
+    ActiveSpins[Icon] = T
+    T:Play()
 end
 
-local function SpinTab(Tab)
+local function Refresh()
     if not Library.TabIconSpin.Enabled then return end
-    SpinIcon(GetTabIcon(Tab))
-end
 
--- 手動呼び出し用（デバッグや任意のタイミングで使える）
-function Library:SpinTabIcon(Tab)
-    SpinTab(Tab)
-end
-
--- ActiveTab の変化を毎フレーム監視（最も確実）
-local LastActive = nil
-local FirstDetected = false
-
-Library:GiveSignal(RunService.Heartbeat:Connect(function()
-    local A = Library.ActiveTab
-    if not A then return end
-    if A == LastActive then return end
-
-    local NewTab = A
-    LastActive = NewTab
-
-    if not FirstDetected and Library.TabIconSpin.SkipFirst then
-        FirstDetected = true
-        return
-    end
-    FirstDetected = true
-
-    SpinTab(NewTab)
-end))
-
--- 即時反応用：タブボタンを直接タップした瞬間にも回す（モバイル対応）
-local HookedButtons = setmetatable({}, { __mode = "k" })
-
-task.spawn(function()
-    while not Library.Unloaded do
+    if Library.TabIconSpin.ActiveOnly then
+        -- 全タブのスピンを一旦止める
         for _, Tab in Library.Tabs do
-            if typeof(Tab) == "table" and Tab.Button and not HookedButtons[Tab.Button] then
-                HookedButtons[Tab.Button] = true
-                local Btn = Tab.Button
-                Btn.InputBegan:Connect(function(Input)
-                    if Input.UserInputType == Enum.UserInputType.Touch
-                       or Input.UserInputType == Enum.UserInputType.MouseButton1 then
-                        task.defer(function()
-                            if Library.ActiveTab == Tab then
-                                SpinTab(Tab)
-                            end
-                        end)
-                    end
-                end)
+            if typeof(Tab) == "table" and Tab.Button then
+                StopSpin(GetTabIcon(Tab))
             end
         end
-        task.wait(1)
+        -- 選択中タブだけ開始
+        local A = Library.ActiveTab
+        if A and A.Button then
+            StartSpin(GetTabIcon(A))
+        end
+    else
+        for _, Tab in Library.Tabs do
+            if typeof(Tab) == "table" and Tab.Button then
+                StartSpin(GetTabIcon(Tab))
+            end
+        end
+    end
+end
+
+-- ActiveTab の変化を検知
+local LastActive = nil
+Library:GiveSignal(RunService.Heartbeat:Connect(function()
+    if Library.ActiveTab ~= LastActive then
+        LastActive = Library.ActiveTab
+        Refresh()
+    end
+end))
+
+-- 新規タブ追加にも追従（2秒ごとに再スキャン）
+task.spawn(function()
+    while not Library.Unloaded do
+        Refresh()
+        task.wait(2)
     end
 end)
---// === End Addon v3 ===
+
+-- 手動API
+function Library:RefreshTabIconSpin() Refresh() end
+function Library:StopAllTabIconSpins()
+    for _, Tab in Library.Tabs do
+        if typeof(Tab) == "table" and Tab.Button then
+            StopSpin(GetTabIcon(Tab))
+        end
+    end
+end
+--// === End Addon v4 ===
 return Library
