@@ -16571,13 +16571,13 @@ function Library:Unload()
 end
 
 getgenv().Library = Library
---// === Tab Icon Continuous Spin (Addon v4) ===
+--// === Tab Icon Continuous Spin (Addon v5) ===
 Library.TabIconSpin = Library.TabIconSpin or {
     Enabled = true,
-    Duration = 1.2,                       -- 1回転にかかる秒数（小さいほど速い）
-    Style = Enum.EasingStyle.Linear,      -- 等速回転
+    Duration = 1.2,                       -- 1回転の秒数（小さいほど速い）
+    Style = Enum.EasingStyle.Linear,
     Direction = Enum.EasingDirection.Out,
-    ActiveOnly = true,                    -- true: 選択中タブのみ / false: 全タブ常時回転
+    ActiveOnly = true,                    -- true: 選択中タブのみ
 }
 
 local ActiveSpins = setmetatable({}, { __mode = "k" })  -- [Icon] = Tween
@@ -16618,6 +16618,7 @@ local function StopSpin(Icon)
 end
 
 local function StartSpin(Icon)
+    -- すでに回っているアイコンは絶対に触らない
     if not Icon or ActiveSpins[Icon] then return end
     Icon.Rotation = 0
     local Info = TweenInfo.new(
@@ -16635,27 +16636,35 @@ local function Refresh()
     if not Library.TabIconSpin.Enabled then return end
 
     if Library.TabIconSpin.ActiveOnly then
-        -- 全タブのスピンを一旦止める
+        local Active = Library.ActiveTab
+        local ActiveIcon = Active and Active.Button and GetTabIcon(Active)
+
+        -- 選択中「以外」で回っているアイコンだけ停止
         for _, Tab in Library.Tabs do
             if typeof(Tab) == "table" and Tab.Button then
-                StopSpin(GetTabIcon(Tab))
+                local Icon = GetTabIcon(Tab)
+                if Icon and Icon ~= ActiveIcon and ActiveSpins[Icon] then
+                    StopSpin(Icon)
+                end
             end
         end
-        -- 選択中タブだけ開始
-        local A = Library.ActiveTab
-        if A and A.Button then
-            StartSpin(GetTabIcon(A))
+
+        -- 選択中タブのアイコンが未回転なら開始（すでに回っていれば何もしない）
+        if ActiveIcon then
+            StartSpin(ActiveIcon)
         end
     else
+        -- 全タブ常時回転
         for _, Tab in Library.Tabs do
             if typeof(Tab) == "table" and Tab.Button then
-                StartSpin(GetTabIcon(Tab))
+                local Icon = GetTabIcon(Tab)
+                if Icon then StartSpin(Icon) end
             end
         end
     end
 end
 
--- ActiveTab の変化を検知
+-- ActiveTabの変化を検知（毎フレーム）
 local LastActive = nil
 Library:GiveSignal(RunService.Heartbeat:Connect(function()
     if Library.ActiveTab ~= LastActive then
@@ -16664,7 +16673,7 @@ Library:GiveSignal(RunService.Heartbeat:Connect(function()
     end
 end))
 
--- 新規タブ追加にも追従（2秒ごとに再スキャン）
+-- 新規タブ追加に追従（2秒ごと）
 task.spawn(function()
     while not Library.Unloaded do
         Refresh()
@@ -16681,5 +16690,5 @@ function Library:StopAllTabIconSpins()
         end
     end
 end
---// === End Addon v4 ===
+--// === End Addon v5 ===
 return Library
