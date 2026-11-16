@@ -16691,9 +16691,9 @@ function Library:StopAllTabIconSpins()
     end
 end
 --// === End Addon v5 ===
---// === Shrink Search Bar from Right (Addon) ===
+--// === Shrink Search Bar from Right (Addon v2) ===
 Library.SearchShrink = Library.SearchShrink or {
-    RightInset = 14,      -- 右から縮めるピクセル数（大きくするほど狭くなる）
+    RightInset = 14,   -- 右から縮めるピクセル数
 }
 
 local function FindSearchTextBox()
@@ -16713,36 +16713,33 @@ end
 local function Apply()
     local Box = FindSearchTextBox()
     if not Box then return false end
-
     local Bar = Box.Parent
     if not Bar or not Bar:IsA("GuiObject") then return false end
 
-    if Bar:GetAttribute("_SearchShrunk") then return true end
+    if Bar:GetAttribute("_SearchShrinkV2") then return true end
 
+    local N = Library.SearchShrink.RightInset
     local s = Bar.Size
-    local inset = Library.SearchShrink.RightInset
+    local p = Bar.Position
+    local A = Bar.AnchorPoint.X
+    local parentW = Bar.Parent and Bar.Parent.AbsoluteSize.X or 0
 
-    if s.X.Scale > 0 then
-        -- スケール幅（親に対する割合）で作られている場合
-        local parentW = Bar.Parent and Bar.Parent.AbsoluteSize.X or 0
-        if parentW > 0 then
-            local delta = inset / parentW
-            Bar.Size = UDim2.new(math.max(0.1, s.X.Scale - delta), s.X.Offset, s.Y.Scale, s.Y.Offset)
-        else
-            Bar.Size = UDim2.new(s.X.Scale, s.X.Offset - inset, s.Y.Scale, s.Y.Offset)
-        end
-    else
-        -- オフセット幅の場合
-        Bar.Size = UDim2.new(s.X.Scale, s.X.Offset - inset, s.Y.Scale, s.Y.Offset)
+    -- 1) 幅を N 縮める
+    local newOffset = s.X.Offset - N
+    local newScale = s.X.Scale
+    if newOffset < 0 and parentW > 0 and newScale > 0 then
+        local extra = -newOffset
+        newScale = math.max(0.05, newScale - extra / parentW)
+        newOffset = 0
     end
 
-    -- 右アンカーされているならPositionも右からずらす（自動判定）
-    if Bar.AnchorPoint.X >= 0.5 then
-        local p = Bar.Position
-        Bar.Position = UDim2.new(p.X.Scale, p.X.Offset + inset, p.Y.Scale, p.Y.Offset)
-    end
+    -- 2) 左端を固定するためにアンカーに応じて位置を左にずらす
+    local posDelta = -N * A      -- A=0:0 / A=0.5:-N/2 / A=1:-N
 
-    Bar:SetAttribute("_SearchShrunk", true)
+    Bar.Size = UDim2.new(newScale, newOffset, s.Y.Scale, s.Y.Offset)
+    Bar.Position = UDim2.new(p.X.Scale, p.X.Offset + posDelta, p.Y.Scale, p.Y.Offset)
+
+    Bar:SetAttribute("_SearchShrinkV2", true)
     return true
 end
 
@@ -16752,13 +16749,5 @@ task.spawn(function()
         task.wait(0.2)
     end
 end)
-
-function Library:RefreshSearchShrink()
-    local Box = FindSearchTextBox()
-    if Box and Box.Parent then
-        Box.Parent:SetAttribute("_SearchShrunk", nil)
-    end
-    Apply()
-end
---// === End Addon ===
+--// === End Addon v2 ===
 return Library
