@@ -16579,7 +16579,7 @@ Library.SearchBarButtonSize = Library.SearchBarButtonSize or 16
 Library.SearchBarButtonGap  = Library.SearchBarButtonGap  or 3
 Library.FooterMarquee = Library.FooterMarquee or { Enabled = true, Speed = 60, Gap = 80 }
 Library.TabIconSpin = Library.TabIconSpin or {
-    Enabled = true, Duration = 1.2,
+    Enabled = true, Duration = 2.0,
     Style = Enum.EasingStyle.Linear, Direction = Enum.EasingDirection.Out, ActiveOnly = true,
 }
 
