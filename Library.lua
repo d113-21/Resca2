@@ -17339,4 +17339,193 @@ end)
 
 function Library:RefreshWindowGlow() AttachGlow() end
 function Library:StopWindowGlow() RemoveGlow() end
+-- ═══ ⑨ Open Animation (v14) ═══
+Library.OpenAnimation = Library.OpenAnimation or {
+    Enabled = true,
+    ImageId = "rbxassetid://99471060496611",
+    Title = "Project Clyrix",
+    ImageSize = 90,
+    CharDelay = 0.07,
+    TextHoldTime = 0.5,
+    FadeOutTime = 0.4,
+    ExpandTime = 0.45,
+    ResizeTime = 0.6,
+    WindowFadeTime = 0.55,
+}
+
+local function BuildSplashGlow(frame)
+    local strokes = {}
+    local wg = Library.WindowGlow
+    if not (wg and wg.Enabled) then return strokes end
+    for i = 1, wg.Layers do
+        local t = (i - 1) / math.max(1, wg.Layers - 1)
+        local tT = t ^ (wg.ThicknessCurve or 1.4)
+        local tF = t ^ (wg.FadeCurve or 0.55)
+        local s = Instance.new("UIStroke")
+        s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        s.Color = wg.Color
+        s.Thickness = wg.InnerThickness + (wg.OuterThickness - wg.InnerThickness) * tT
+        s.Transparency = math.clamp(
+            wg.InnerTransparency + (wg.OuterTransparency - wg.InnerTransparency) * tF,
+            0.05, 0.98
+        )
+        s.ZIndex = frame.ZIndex + 1
+        s.Parent = frame
+        table.insert(strokes, s)
+    end
+    return strokes
+end
+
+function Library:PlayOpenAnimation(callback)
+    local cfg = Library.OpenAnimation
+    if not cfg.Enabled then if callback then callback() end return end
+    local W = Library.Window
+    local mf = W and W.MainFrame
+    local sg = Library.ScreenGui
+    if not mf or not sg then if callback then callback() end return end
+
+    -- レイアウト確定待ち
+    local tries = 0
+    while (mf.AbsoluteSize.X < 10 or mf.AbsoluteSize.Y < 10) and tries < 60 do
+        RunService.RenderStepped:Wait(); tries += 1
+    end
+
+    mf.Visible = false
+
+    local cam = workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+    local cx, cy = vp.X / 2, vp.Y / 2
+    local imgSize = cfg.ImageSize
+
+    -- スプラッシュ枠
+    local splash = Instance.new("Frame")
+    splash.Name = "_OpenSplash"
+    splash.BackgroundColor3 = Library.Scheme.MainColor or Color3.fromRGB(25, 25, 25)
+    splash.BorderSizePixel = 0
+    splash.AnchorPoint = Vector2.new(0.5, 0.5)
+    splash.Position = UDim2.fromOffset(cx, cy)
+    splash.Size = UDim2.fromOffset(imgSize, imgSize)
+    splash.ClipsDescendants = true
+    splash.BackgroundTransparency = 1
+    splash.ZIndex = 9000
+    splash.Parent = sg
+    Instance.new("UICorner", splash).CornerRadius = UDim.new(0, 6)
+
+    local glowStrokes = BuildSplashGlow(splash)
+
+    -- 画像
+    local img = Instance.new("ImageLabel")
+    img.Name = "SplashImage"
+    img.BackgroundTransparency = 1
+    img.BorderSizePixel = 0
+    img.Image = cfg.ImageId
+    img.Size = UDim2.fromOffset(imgSize, imgSize)
+    img.Position = UDim2.fromOffset(0, 0)
+    img.ScaleType = Enum.ScaleType.Fit
+    img.ImageTransparency = 1
+    img.ZIndex = splash.ZIndex + 2
+    img.Parent = splash
+    Instance.new("UICorner", img).CornerRadius = UDim.new(0, 4)
+
+    -- タイトル
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Name = "SplashTitle"
+    textLabel.BackgroundTransparency = 1
+    textLabel.Size = UDim2.new(0, 0, 1, 0)
+    textLabel.Position = UDim2.fromOffset(imgSize, 0)
+    textLabel.Text = ""
+    textLabel.TextSize = 22
+    textLabel.TextColor3 = Library.Scheme.FontColor or Color3.new(1, 1, 1)
+    textLabel.FontFace = Library.Scheme.Font or Font.fromEnum(Enum.Font.Code)
+    textLabel.TextXAlignment = Enum.TextXAlignment.Left
+    textLabel.TextYAlignment = Enum.TextYAlignment.Center
+    textLabel.ZIndex = splash.ZIndex + 2
+    textLabel.Parent = splash
+    local tp = Instance.new("UIPadding", textLabel)
+    tp.PaddingLeft = UDim.new(0, 16)
+    tp.PaddingRight = UDim.new(0, 16)
+
+    local fullText = cfg.Title
+    local textWidth = #fullText * 14 + 60
+    pcall(function()
+        local tw = Library:GetTextBounds(fullText, Library.Scheme.Font, 22, 500)
+        if tw and tw > 0 then textWidth = tw + 40 end
+    end)
+    textWidth = math.max(textWidth, 200)
+
+    -- フェードイン
+    local fadeIn = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    TweenService:Create(splash, fadeIn, { BackgroundTransparency = 0 }):Play()
+    TweenService:Create(img, fadeIn, { ImageTransparency = 0 }):Play()
+    task.wait(0.3)
+
+    -- ① フレームを横に伸ばす
+    local expandInfo = TweenInfo.new(cfg.ExpandTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local expandTween = TweenService:Create(splash, expandInfo, {
+        Size = UDim2.fromOffset(imgSize + textWidth, imgSize),
+    })
+    expandTween:Play()
+    expandTween.Completed:Wait()
+
+    -- ② タイプライター
+    local len = utf8.len(fullText) or #fullText
+    for i = 1, len do
+        local nxt = utf8.offset(fullText, i + 1)
+        textLabel.Text = nxt and string.sub(fullText, 1, nxt - 1) or fullText
+        task.wait(cfg.CharDelay)
+    end
+    textLabel.Text = fullText
+
+    -- ③ ホールド → フェードアウト
+    task.wait(cfg.TextHoldTime)
+    local fadeOutInfo = TweenInfo.new(cfg.FadeOutTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    TweenService:Create(textLabel, fadeOutInfo, { TextTransparency = 1 }):Play()
+    task.wait(cfg.FadeOutTime)
+
+    -- ④ フレームを Window サイズへ、画像を左上アイコン位置へ
+    local wp, ws = mf.AbsolutePosition, mf.AbsoluteSize
+    local targetCx = wp.X + ws.X / 2
+    local targetCy = wp.Y + ws.Y / 2
+
+    local iconSize = 30
+    if W.IconSize and W.IconSize.X.Offset and W.IconSize.X.Offset > 0 then
+        iconSize = W.IconSize.X.Offset
+    end
+
+    local resizeInfo = TweenInfo.new(cfg.ResizeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local resizeTween = TweenService:Create(splash, resizeInfo, {
+        Position = UDim2.fromOffset(targetCx, targetCy),
+        Size = UDim2.fromOffset(ws.X, ws.Y),
+    })
+    resizeTween:Play()
+    TweenService:Create(img, resizeInfo, {
+        Size = UDim2.fromOffset(iconSize, iconSize),
+        Position = UDim2.fromOffset(10, 10),
+    }):Play()
+    resizeTween.Completed:Wait()
+
+    -- ⑤ Window を表示してスプラッシュをフェードアウト
+    mf.Visible = true
+    local revealInfo = TweenInfo.new(cfg.WindowFadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    TweenService:Create(splash, revealInfo, { BackgroundTransparency = 1 }):Play()
+    for _, s in ipairs(glowStrokes) do
+        TweenService:Create(s, revealInfo, { Transparency = 1 }):Play()
+    end
+    task.wait(cfg.WindowFadeTime)
+
+    splash:Destroy()
+    if callback then callback() end
+end
+
+-- Window 初回生成時に自動再生
+task.spawn(function()
+    while not Library.Unloaded do
+        if Library.Window and Library.Window.MainFrame then
+            task.wait(0.2)
+            pcall(function() Library:PlayOpenAnimation() end)
+            break
+        end
+        task.wait(0.1)
+    end
+end)
 return Library
