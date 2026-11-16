@@ -17339,7 +17339,7 @@ end)
 
 function Library:RefreshWindowGlow() AttachGlow() end
 function Library:StopWindowGlow() RemoveGlow() end
--- ═══ ⑨ Open Animation (v15) ═══
+-- ═══ ⑨ Open Animation (v16) ═══
 Library.OpenAnimation = Library.OpenAnimation or {
     Enabled = true,
     ImageId = "rbxassetid://99471060496611",
@@ -17349,7 +17349,7 @@ Library.OpenAnimation = Library.OpenAnimation or {
     TextHoldTime = 0.5,
     FadeOutTime = 0.4,
     ExpandTime = 0.45,
-    ResizeTime = 0.7,
+    ResizeTime = 0.8,
     CornerRadius = 18,
 }
 
@@ -17378,6 +17378,28 @@ local function BuildSplashGlow(frame)
     return strokes
 end
 
+local function CollectHidableButtons(splashRef)
+    local list = {}
+    local mainFrame = Library.Window and Library.Window.MainFrame
+    for _, d in ipairs(Library.ScreenGui:GetDescendants()) do
+        if d:IsA("GuiButton") and d.Visible then
+            local skip = false
+            local p = d
+            while p and p ~= Library.ScreenGui do
+                if p == mainFrame or p == splashRef or p.Name == "_OpenSplash" then
+                    skip = true
+                    break
+                end
+                p = p.Parent
+            end
+            if not skip then
+                table.insert(list, d)
+            end
+        end
+    end
+    return list
+end
+
 function Library:PlayOpenAnimation(callback)
     local cfg = Library.OpenAnimation
     if not cfg.Enabled then if callback then callback() end return end
@@ -17386,7 +17408,6 @@ function Library:PlayOpenAnimation(callback)
     local sg = Library.ScreenGui
     if not mf or not sg then if callback then callback() end return end
 
-    -- レイアウト確定待ち
     local tries = 0
     while (mf.AbsoluteSize.X < 10 or mf.AbsoluteSize.Y < 10) and tries < 120 do
         RunService.RenderStepped:Wait(); tries += 1
@@ -17399,7 +17420,6 @@ function Library:PlayOpenAnimation(callback)
     local cx, cy = vp.X / 2, vp.Y / 2
     local imgSize = cfg.ImageSize
 
-    -- スプラッシュ枠
     local splash = Instance.new("Frame")
     splash.Name = "_OpenSplash"
     splash.BackgroundColor3 = Library.Scheme.MainColor or Color3.fromRGB(25, 25, 25)
@@ -17415,13 +17435,18 @@ function Library:PlayOpenAnimation(callback)
 
     local glowStrokes = BuildSplashGlow(splash)
 
+    -- ★ スプラッシュ以外のボタン（左上の切り替え・ロック等）を隠す
+    local hiddenButtons = CollectHidableButtons(splash)
+    for _, btn in ipairs(hiddenButtons) do
+        btn.Visible = false
+    end
+
     local img = Instance.new("ImageLabel")
     img.Name = "SplashImage"
     img.BackgroundTransparency = 1
     img.BorderSizePixel = 0
     img.Image = cfg.ImageId
     img.Size = UDim2.fromOffset(imgSize, imgSize)
-    img.Position = UDim2.fromOffset(0, 0)
     img.ScaleType = Enum.ScaleType.Fit
     img.ImageTransparency = 1
     img.ZIndex = splash.ZIndex + 2
@@ -17452,13 +17477,11 @@ function Library:PlayOpenAnimation(callback)
         if tw and tw > 0 then textWidth = tw + 40 end
     end)
 
-    -- フェードイン
     local fadeIn = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
     TweenService:Create(splash, fadeIn, { BackgroundTransparency = 0 }):Play()
     TweenService:Create(img, fadeIn, { ImageTransparency = 0 }):Play()
     task.wait(0.3)
 
-    -- 横展開
     local expandTween = TweenService:Create(
         splash,
         TweenInfo.new(cfg.ExpandTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
@@ -17467,7 +17490,6 @@ function Library:PlayOpenAnimation(callback)
     expandTween:Play()
     expandTween.Completed:Wait()
 
-    -- タイプライター
     local len = utf8.len(fullText) or #fullText
     for i = 1, len do
         local nxt = utf8.offset(fullText, i + 1)
@@ -17476,7 +17498,6 @@ function Library:PlayOpenAnimation(callback)
     end
     textLabel.Text = fullText
 
-    -- ホールド → フェードアウト
     task.wait(cfg.TextHoldTime)
     TweenService:Create(
         textLabel,
@@ -17485,7 +17506,6 @@ function Library:PlayOpenAnimation(callback)
     ):Play()
     task.wait(cfg.FadeOutTime)
 
-    -- リサイズ先計算
     local wp, ws = mf.AbsolutePosition, mf.AbsoluteSize
     local targetCx = wp.X + ws.X / 2
     local targetCy = wp.Y + ws.Y / 2
@@ -17494,37 +17514,47 @@ function Library:PlayOpenAnimation(callback)
         iconSize = W.IconSize.X.Offset
     end
 
-    -- ★ Window を先に表示（スプラッシュの裏に隠れる）
-    mf.Visible = true
-
-    -- ★ リサイズと同時にスプラッシュをフェードアウト
+    -- ★ リサイズ中もウィンドウは非表示のまま
     local resizeInfo = TweenInfo.new(cfg.ResizeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local fadeInfo = TweenInfo.new(cfg.ResizeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
-
-    TweenService:Create(splash, resizeInfo, {
+    local resizeTween = TweenService:Create(splash, resizeInfo, {
         Position = UDim2.fromOffset(targetCx, targetCy),
         Size = UDim2.fromOffset(ws.X, ws.Y),
-        BackgroundTransparency = 1,
-    }):Play()
-    TweenService:Create(splash, TweenInfo.new(cfg.ResizeTime, Enum.EasingStyle.Linear), {
-        BackgroundTransparency = 1,
-    }):Play()
+    })
+    resizeTween:Play()
+
     TweenService:Create(img, resizeInfo, {
         Size = UDim2.fromOffset(iconSize, iconSize),
         Position = UDim2.fromOffset(10, 10),
-        ImageTransparency = 1,
     }):Play()
+    task.delay(cfg.ResizeTime * 0.5, function()
+        TweenService:Create(img, TweenInfo.new(cfg.ResizeTime * 0.5, Enum.EasingStyle.Linear), {
+            ImageTransparency = 1,
+        }):Play()
+    end)
     for _, s in ipairs(glowStrokes) do
-        TweenService:Create(s, fadeInfo, { Transparency = 1 }):Play()
+        TweenService:Create(s, TweenInfo.new(cfg.ResizeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+            Transparency = 1,
+        }):Play()
     end
 
-    task.wait(cfg.ResizeTime + 0.05)
+    resizeTween.Completed:Wait()
+
+    -- ★ スプラッシュがウィンドウサイズと完全一致した瞬間にウィンドウ表示
+    mf.Visible = true
     splash:Destroy()
+
+    -- 隠したボタンを復元
+    for _, btn in ipairs(hiddenButtons) do
+        if btn and btn.Parent then
+            btn.Visible = true
+        end
+    end
+
     OpenAnimPlayed = true
     if callback then callback() end
 end
 
--- Window 生成の瞬間に非表示にする（ちらつき防止・RenderSteppedで先回り）
+-- トリガー（MainFrame検出時）
 do
     local conn
     conn = RunService.RenderStepped:Connect(function()
