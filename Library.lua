@@ -16750,4 +16750,339 @@ task.spawn(function()
     end
 end)
 --// === End Addon v2 ===
+--// === Search Bar Buttons (Bell + X) + Notification History (Addon) ===
+Library.NotifHistory = Library.NotifHistory or { Entries = {}, MaxEntries = 500, Panel = nil, PanelOpen = false }
+local History = Library.NotifHistory
+local BellBtn, CloseBtn, BellBadge, HistoryPanel
+
+local function FindSearchBar()
+    if not Library.ScreenGui then return nil end
+    for _, D in Library.ScreenGui:GetDescendants() do
+        if D:IsA("TextBox") and string.lower(D.PlaceholderText or ""):find("search") then
+            return D.Parent
+        end
+    end
+    return nil
+end
+
+local function UpdateBadge()
+    if not BellBadge or not BellBadge.Parent then return end
+    local n = #History.Entries
+    BellBadge.Visible = (n > 0)
+    BellBadge.Text = (n > 99) and "99+" or tostring(n)
+end
+function Library:RefreshBellBadge() UpdateBadge() end
+
+-- Notify フック（Library.Notifyが定義されたら自動でフック）
+task.spawn(function()
+    while not Library.Unloaded do
+        if typeof(Library.Notify) == "function" and not Library._NotifHook then
+            Library._NotifHook = true
+            local Orig = Library.Notify
+            Library.Notify = function(...)
+                local a = table.pack(...)
+                local text = ""
+                if a[1] == Library then text = tostring(a[2] or "") else text = tostring(a[1] or "") end
+                local t = os.date("*t")
+                table.insert(History.Entries, 1, { Time = string.format("%02d:%02d:%02d", t.hour, t.min, t.sec), Text = text })
+                while #History.Entries > History.MaxEntries do table.remove(History.Entries) end
+                UpdateBadge()
+                if History.PanelOpen then Library:RefreshHistoryPanel() end
+                return Orig(...)
+            end
+            break
+        end
+        task.wait(0.3)
+    end
+end)
+
+-- ベル・×ボタン生成
+local function CreateSearchBarButtons()
+    if Library._SearchActionsContainer and Library._SearchActionsContainer.Parent then return true end
+    local Bar = FindSearchBar()
+    if not Bar or not Bar.Parent then return false end
+
+    local BarH = Bar.AbsoluteSize.Y
+    if BarH <= 0 then BarH = 34 end
+    local BtnSize = math.clamp(BarH - 6, 20, 32)
+    local Gap = 4
+
+    local Container = Instance.new("Frame")
+    Container.Name = "_SearchBarActions"
+    Container.BackgroundTransparency = 1
+    Container.AnchorPoint = Vector2.new(1, 0.5)
+    Container.Position = UDim2.new(1, -Gap, 0.5, 0)
+    Container.Size = UDim2.fromOffset(2 * BtnSize + Gap, BtnSize)
+    Container.Parent = Bar.Parent
+    Library._SearchActionsContainer = Container
+
+    local xBtn = Library:CreateIcon(Library:GetIcon("x"), {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.fromOffset(BtnSize, BtnSize), ImageColor3 = "FontColor", Parent = Container,
+    }, true)
+    xBtn.Name = "_CloseBtn"
+    CloseBtn = xBtn
+
+    local bell = Library:CreateIcon(Library:GetIcon("bell"), {
+        AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -(BtnSize + Gap), 0.5, 0),
+        Size = UDim2.fromOffset(BtnSize, BtnSize), ImageColor3 = "FontColor", Parent = Container,
+    }, true)
+    bell.Name = "_BellBtn"
+    BellBtn = bell
+
+    local badge = Instance.new("TextLabel")
+    badge.Name = "_Badge"
+    badge.BackgroundTransparency = 1
+    badge.AnchorPoint = Vector2.new(1, 1)
+    badge.Position = UDim2.new(1, 3, 1, 2)
+    badge.Size = UDim2.fromOffset(22, 12)
+    badge.TextSize = 10
+    badge.TextColor3 = Color3.fromRGB(255, 70, 70)
+    badge.Font = Enum.Font.GothamBold
+    badge.TextXAlignment = Enum.TextXAlignment.Right
+    badge.Text = ""
+    badge.Visible = false
+    badge.ZIndex = bell.ZIndex + 2
+    badge.Parent = bell
+    BellBadge = badge
+
+    bell.MouseButton1Click:Connect(function() Library:ToggleHistoryPanel() end)
+    xBtn.MouseButton1Click:Connect(function() Library:ShowCloseConfirm() end)
+
+    UpdateBadge()
+    return true
+end
+
+task.spawn(function()
+    while not Library.Unloaded do
+        if CreateSearchBarButtons() then break end
+        task.wait(0.2)
+    end
+end)
+
+-- 履歴パネル
+local function CreateHistoryPanel()
+    if HistoryPanel and HistoryPanel.Parent then return HistoryPanel end
+
+    local backdrop = Library.ScreenGui:FindFirstChild("_HistoryBackdrop")
+    if not backdrop then
+        backdrop = Instance.new("TextButton")
+        backdrop.Name = "_HistoryBackdrop"
+        backdrop.BackgroundTransparency = 1
+        backdrop.Size = UDim2.fromScale(1, 1)
+        backdrop.Text = ""
+        backdrop.ZIndex = 499
+        backdrop.Visible = false
+        backdrop.Parent = Library.ScreenGui
+        backdrop.MouseButton1Click:Connect(function() Library:CloseHistoryPanel() end)
+    end
+
+    local panel = Instance.new("ScrollingFrame")
+    panel.Name = "_HistoryPanel"
+    panel.BackgroundColor3 = Library.Scheme.MainColor or Color3.fromRGB(25, 25, 25)
+    panel.BorderSizePixel = 0
+    panel.Size = UDim2.fromOffset(340, 380)
+    panel.AnchorPoint = Vector2.new(1, 0)
+    panel.Position = UDim2.new(1, -12, 0, 50)
+    panel.CanvasSize = UDim2.new(0, 0, 0, 0)
+    panel.ScrollBarThickness = 4
+    panel.ScrollBarImageColor3 = Library.Scheme.AccentColor or Color3.fromRGB(125, 85, 255)
+    panel.ClipsDescendants = true
+    panel.ZIndex = 500
+    panel.Visible = false
+    panel.Parent = Library.ScreenGui
+
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 6)
+    local stroke = Instance.new("UIStroke", panel)
+    stroke.Color = Library.Scheme.OutlineColor or Color3.fromRGB(60, 60, 60)
+    stroke.Thickness = 1
+
+    local pad = Instance.new("UIPadding", panel)
+    pad.PaddingTop = UDim.new(0, 8); pad.PaddingBottom = UDim.new(0, 8)
+    pad.PaddingLeft = UDim.new(0, 10); pad.PaddingRight = UDim.new(0, 10)
+
+    local layout = Instance.new("UIListLayout", panel)
+    layout.Padding = UDim.new(0, 5)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local header = Instance.new("TextLabel")
+    header.Name = "Header"
+    header.BackgroundTransparency = 1
+    header.Size = UDim2.new(1, -20, 0, 26)
+    header.Text = "Notification History"
+    header.TextSize = 14
+    header.TextColor3 = Library.Scheme.FontColor or Color3.new(1,1,1)
+    header.Font = Enum.Font.GothamBold
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.LayoutOrder = -1
+    header.ZIndex = 501
+    header.Parent = panel
+
+    local content = Instance.new("Frame")
+    content.Name = "Content"
+    content.BackgroundTransparency = 1
+    content.Size = UDim2.new(1, -20, 0, 0)
+    content.AutomaticSize = Enum.AutomaticSize.Y
+    content.ZIndex = 500
+    content.Parent = panel
+
+    local cl = Instance.new("UIListLayout", content)
+    cl.Padding = UDim.new(0, 4)
+    cl.SortOrder = Enum.SortOrder.LayoutOrder
+
+    HistoryPanel = panel
+    return panel
+end
+
+function Library:RefreshHistoryPanel()
+    if not HistoryPanel or not HistoryPanel.Parent then return end
+    local content = HistoryPanel:FindFirstChild("Content")
+    if not content then return end
+    local cl = content:FindFirstChildOfClass("UIListLayout")
+    for _, c in content:GetChildren() do if c:IsA("TextLabel") then c:Destroy() end end
+
+    if #History.Entries == 0 then
+        local e = Instance.new("TextLabel")
+        e.BackgroundTransparency = 1
+        e.Size = UDim2.new(1, 0, 0, 24)
+        e.Text = "(no notifications)"
+        e.TextSize = 12
+        e.TextColor3 = Library.Scheme.FontColor or Color3.new(1,1,1)
+        e.TextTransparency = 0.5
+        e.Font = Enum.Font.Gotham
+        e.TextXAlignment = Enum.TextXAlignment.Left
+        e.Parent = content
+    else
+        for i, en in ipairs(History.Entries) do
+            local lb = Instance.new("TextLabel")
+            lb.BackgroundTransparency = 1
+            lb.Size = UDim2.new(1, 0, 0, 0)
+            lb.AutomaticSize = Enum.AutomaticSize.Y
+            lb.Text = en.Time .. " | " .. en.Text
+            lb.TextSize = 12
+            lb.TextColor3 = Library.Scheme.FontColor or Color3.new(1,1,1)
+            lb.Font = Enum.Font.Code
+            lb.TextXAlignment = Enum.TextXAlignment.Left
+            lb.TextWrapped = true
+            lb.LayoutOrder = i
+            lb.Parent = content
+        end
+    end
+
+    task.defer(function()
+        if not HistoryPanel or not HistoryPanel.Parent or not cl then return end
+        HistoryPanel.CanvasSize = UDim2.new(0, 0, 0, cl.AbsoluteContentSize.Y + 50)
+    end)
+end
+
+function Library:OpenHistoryPanel()
+    CreateHistoryPanel()
+    Library:RefreshHistoryPanel()
+    HistoryPanel.Visible = true
+    local b = Library.ScreenGui:FindFirstChild("_HistoryBackdrop")
+    if b then b.Visible = true end
+    History.PanelOpen = true
+end
+
+function Library:CloseHistoryPanel()
+    if HistoryPanel then HistoryPanel.Visible = false end
+    local b = Library.ScreenGui:FindFirstChild("_HistoryBackdrop")
+    if b then b.Visible = false end
+    History.PanelOpen = false
+end
+
+function Library:ToggleHistoryPanel()
+    if History.PanelOpen then Library:CloseHistoryPanel() else Library:OpenHistoryPanel() end
+end
+
+-- クローズ確認ダイアログ（英語 Yes/No）
+local ConfirmDialog
+local function CreateConfirmDialog()
+    if ConfirmDialog and ConfirmDialog.Parent then return ConfirmDialog end
+
+    local overlay = Instance.new("Frame")
+    overlay.Name = "_CloseConfirm"
+    overlay.BackgroundColor3 = Color3.new(0,0,0)
+    overlay.BackgroundTransparency = 0.5
+    overlay.BorderSizePixel = 0
+    overlay.Size = UDim2.fromScale(1, 1)
+    overlay.ZIndex = 1000
+    overlay.Visible = false
+    overlay.Parent = Library.ScreenGui
+
+    local dialog = Instance.new("Frame")
+    dialog.BackgroundColor3 = Library.Scheme.MainColor or Color3.fromRGB(25, 25, 25)
+    dialog.BorderSizePixel = 0
+    dialog.Size = UDim2.fromOffset(300, 140)
+    dialog.Position = UDim2.fromScale(0.5, 0.5)
+    dialog.AnchorPoint = Vector2.new(0.5, 0.5)
+    dialog.ZIndex = 1001
+    dialog.Parent = overlay
+
+    Instance.new("UICorner", dialog).CornerRadius = UDim.new(0, 6)
+    local st = Instance.new("UIStroke", dialog)
+    st.Color = Library.Scheme.OutlineColor or Color3.fromRGB(60,60,60)
+    st.Thickness = 1
+
+    local msg = Instance.new("TextLabel")
+    msg.BackgroundTransparency = 1
+    msg.Size = UDim2.new(1, -24, 0, 60)
+    msg.Position = UDim2.fromOffset(12, 18)
+    msg.Text = "Are you sure you want to close?"
+    msg.TextSize = 14
+    msg.TextColor3 = Library.Scheme.FontColor or Color3.new(1,1,1)
+    msg.Font = Enum.Font.Gotham
+    msg.TextWrapped = true
+    msg.TextXAlignment = Enum.TextXAlignment.Center
+    msg.ZIndex = 1002
+    msg.Parent = dialog
+
+    local function mk(name, text, color, xo)
+        local b = Instance.new("TextButton")
+        b.Name = name; b.BackgroundColor3 = color; b.BorderSizePixel = 0
+        b.Size = UDim2.fromOffset(110, 34)
+        b.Position = UDim2.new(0.5, xo, 1, -14)
+        b.AnchorPoint = Vector2.new(0.5, 1)
+        b.Text = text; b.TextSize = 14
+        b.TextColor3 = Color3.new(1,1,1)
+        b.Font = Enum.Font.GothamBold
+        b.ZIndex = 1002; b.Parent = dialog
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
+        return b
+    end
+
+    local yes = mk("Yes", "Yes", Library.Scheme.AccentColor or Color3.fromRGB(125,85,255), -60)
+    local no = mk("No", "No", Library.Scheme.DestructiveColor or Color3.fromRGB(220,38,38), 60)
+
+    yes.MouseButton1Click:Connect(function()
+        overlay.Visible = false
+        Library:CloseWindowSafely()
+    end)
+    no.MouseButton1Click:Connect(function() overlay.Visible = false end)
+
+    ConfirmDialog = overlay
+    return overlay
+end
+
+function Library:ShowCloseConfirm() CreateConfirmDialog().Visible = true end
+
+function Library:CloseWindowSafely()
+    local W = Library.Window
+    if not W then
+        Library.Toggled = false
+        return
+    end
+    if typeof(W.Close) == "function" then
+        local ok = pcall(function() W:Close() end)
+        if ok then return end
+    end
+    if typeof(W.SetVisible) == "function" then
+        local ok = pcall(function() W:SetVisible(false) end)
+        if ok then return end
+    end
+    if W.MainFrame then
+        pcall(function() W.MainFrame.Visible = false; Library.Toggled = false end)
+    end
+end
+--// === End Addon ===
 return Library
