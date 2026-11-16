@@ -16770,7 +16770,32 @@ local function FindSearchBar()
     return nil
 end
 
--- Notify フック（堅牢版：文字列/テーブル/複数引数すべて対応）
+-- Notify キャプチャ（Library.Notify + StarterGui:SetCore 両対応・重複防止付き）
+local _suppressSetCore = false
+
+local function AddHistoryEntry(title, text)
+    local line
+    if title and tostring(title) ~= "" and text and tostring(text) ~= "" then
+        line = tostring(title) .. ": " .. tostring(text)
+    elseif text and tostring(text) ~= "" then
+        line = tostring(text)
+    elseif title and tostring(title) ~= "" then
+        line = tostring(title)
+    else
+        line = "(notification)"
+    end
+    local t = os.date("*t")
+    table.insert(History.Entries, 1, {
+        Time = string.format("%02d:%02d:%02d", t.hour, t.min, t.sec),
+        Text = line,
+    })
+    while #History.Entries > History.MaxEntries do
+        table.remove(History.Entries)
+    end
+    if History.PanelOpen then Library:RefreshHistoryPanel() end
+end
+
+-- ① Library.Notify フック
 task.spawn(function()
     while not Library.Unloaded do
         if typeof(Library.Notify) == "function" and not Library._NotifHook then
@@ -16779,36 +16804,79 @@ task.spawn(function()
             Library.Notify = function(...)
                 local a = table.pack(...)
                 local startIdx = (a[1] == Library) and 2 or 1
-                local parts = {}
-                for i = startIdx, a.n do
-                    local v = a[i]
-                    local vt = typeof(v)
-                    if vt == "string" then
-                        if v ~= "" then table.insert(parts, v) end
-                    elseif vt == "table" then
-                        local tv = v.Text or v.Title or v.Content or v.Message or v.Body
-                        if tv and tostring(tv) ~= "" then table.insert(parts, tostring(tv)) end
+                local title, text
+                local first = a[startIdx]
+                if typeof(first) == "table" then
+                    title = first.Title or first.title
+                    text  = first.Text or first.text or first.Description or first.Content or first.Message or first.Body
+                else
+                    local strs = {}
+                    for i = startIdx, a.n do
+                        if typeof(a[i]) == "string" and a[i] ~= "" then
+                            table.insert(strs, a[i])
+                        end
+                    end
+                    if #strs >= 2 then
+                        title, text = strs[1], strs[2]
+                    elseif #strs == 1 then
+                        text = strs[1]
                     end
                 end
-                local text = table.concat(parts, " | ")
-                if text == "" then text = "(notification)" end
-                local t = os.date("*t")
-                table.insert(History.Entries, 1, {
-                    Time = string.format("%02d:%02d:%02d", t.hour, t.min, t.sec),
-                    Text = text,
-                })
-                while #History.Entries > History.MaxEntries do
-                    table.remove(History.Entries)
-                end
-                if History.PanelOpen then Library:RefreshHistoryPanel() end
-                return Orig(...)
+                AddHistoryEntry(title, text)
+
+                local prev = _suppressSetCore
+                _suppressSetCore = true
+                local ok, result = pcall(Orig, ...)
+                _suppressSetCore = prev
+                if not ok then error(result, 0) end
+                return result
             end
             break
         end
-        task.wait(0.3)
+        task.wait(0.2)
     end
 end)
 
+-- ② StarterGui:SetCore("SendNotification", ...) フック
+do
+    local SG = game:GetService("StarterGui")
+    local origSetCore = SG.SetCore
+    local hooked = false
+    if typeof(hookfunction) == "function" then
+        local orig
+        local ok = pcall(function()
+            orig = hookfunction(origSetCore, function(self, method, ...)
+                if method == "SendNotification" and not _suppressSetCore then
+                    local args = {...}
+                    local data = args[1]
+                    if typeof(data) == "table" then
+                        local title = data.Title
+                        local text  = data.Text or data.Description or data.Content or data.Message
+                        AddHistoryEntry(title, text)
+                    end
+                end
+                return orig(self, method, ...)
+            end)
+        end)
+        if ok and orig then hooked = true end
+    end
+    if not hooked then
+        pcall(function()
+            SG.SetCore = function(self, method, ...)
+                if method == "SendNotification" and not _suppressSetCore then
+                    local args = {...}
+                    local data = args[1]
+                    if typeof(data) == "table" then
+                        local title = data.Title
+                        local text  = data.Text or data.Description or data.Content or data.Message
+                        AddHistoryEntry(title, text)
+                    end
+                end
+                return origSetCore(self, method, ...)
+            end
+        end)
+    end
+end
 -- ベル・×ボタン生成（バッジなし）
 local function CreateSearchBarButtons()
     if Library._SearchActionsContainer and Library._SearchActionsContainer.Parent then return true end
