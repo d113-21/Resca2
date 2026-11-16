@@ -16693,7 +16693,7 @@ end
 --// === End Addon v5 ===
 --// === Shrink Search Bar from Right (Addon v2) ===
 Library.SearchShrink = Library.SearchShrink or {
-    RightInset = 40,   -- 右から縮めるピクセル数
+    RightInset = 80,   -- 右から縮めるピクセル数
 }
 
 local function FindSearchTextBox()
