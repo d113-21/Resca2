@@ -17338,9 +17338,8 @@ end)
 
 function Library:RefreshWindowGlow() AttachGlow() end
 function Library:StopWindowGlow() RemoveGlow() end
--- ═══ Toggle / Lock 四角いカスタムボタン化 (v24) ═══
+-- ═══ Toggle / Lock 四角いカスタムボタン化 (v25) ═══
 task.spawn(function()
-    -- 生成を待つ
     local waitT = 0
     while not Library.Unloaded and waitT < 200 do
         if Library.Floats and Library.Window and Library.Window.MainFrame then break end
@@ -17348,14 +17347,14 @@ task.spawn(function()
     end
     task.wait(1)
 
-    -- ① 元の壊れた「Toggle」「Lock」ボタンを探して完全に削除
+    -- 元のボタンを削除
     for _, desc in ipairs(Library.Floats:GetDescendants()) do
         if desc:IsA("TextButton") and (desc.Text:lower():find("toggle") or desc.Text:lower():find("lock")) then
             desc:Destroy()
         end
     end
 
-    -- ② 新しく四角いボタンを配置するコンテナを作成
+    -- コンテナ作成
     local container = Instance.new("Frame")
     container.Name = "_CustomActionButtons"
     container.BackgroundTransparency = 1
@@ -17368,10 +17367,9 @@ task.spawn(function()
     layout.Padding = UDim.new(0, 10)
     layout.VerticalAlignment = Enum.VerticalAlignment.Center
 
-    -- コンテナをドラッグ可能にする
     Library:MakeDraggable(container, container, true)
 
-    -- 四角いボタンを作成する関数
+    -- 四角いボタン作成
     local function CreateSquareButton()
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.fromOffset(30, 30)
@@ -17399,33 +17397,40 @@ task.spawn(function()
         return btn, img
     end
 
-    -- ボタンの生成
     local toggleBtn, toggleIcon = CreateSquareButton()
     toggleBtn.Parent = container
     
     local lockBtn, lockIcon = CreateSquareButton()
     lockBtn.Parent = container
 
-    -- アイコン取得用ヘルパー
-    local function SetIcon(imgLabel, iconName)
-        local data = Library:GetIcon(iconName) or Library:GetCustomIcon(iconName)
+    -- アイコン適用（スプライトシート対応）
+    local function ApplyIcon(imgLabel, iconName)
+        local data = Library:GetIcon(iconName)
+        if not data then
+            data = Library:GetCustomIcon(iconName)
+        end
         if data and data.Url then
             imgLabel.Image = data.Url
+            if data.ImageRectOffset then
+                imgLabel.ImageRectOffset = data.ImageRectOffset
+            end
+            if data.ImageRectSize then
+                imgLabel.ImageRectSize = data.ImageRectSize
+            end
         end
     end
 
-    -- 初期アイコン設定
-    SetIcon(toggleIcon, "eye")
-    SetIcon(lockIcon, "lock-keyhole-open")
+    -- 初期アイコン
+    ApplyIcon(toggleIcon, "eye")
+    ApplyIcon(lockIcon, "lock-keyhole-open")
 
-    -- クリックイベントの設定
+    -- クリックイベント
     toggleBtn.MouseButton1Click:Connect(function()
         if typeof(Library.Toggle) == "function" then
             Library:Toggle()
         elseif typeof(Library.ToggleWindow) == "function" then
             Library:ToggleWindow()
         else
-            -- 代替処理
             Library.Toggled = not Library.Toggled
             if Library.Window and Library.Window.MainFrame then
                 Library.Window.MainFrame.Visible = Library.Toggled
@@ -17437,19 +17442,19 @@ task.spawn(function()
         Library.CantDragForced = not Library.CantDragForced
     end)
 
-    -- 状態監視とアイコン切り替えループ
+    -- 状態監視
     local lastToggled, lastLocked
     Library:GiveSignal(RunService.Heartbeat:Connect(function()
         local isVisible = Library.Toggled
         if isVisible ~= lastToggled then
             lastToggled = isVisible
-            SetIcon(toggleIcon, isVisible and "eye-off" or "eye")
+            ApplyIcon(toggleIcon, isVisible and "eye-off" or "eye")
         end
 
         local isLocked = Library.CantDragForced
         if isLocked ~= lastLocked then
             lastLocked = isLocked
-            SetIcon(lockIcon, isLocked and "lock-keyhole" or "lock-keyhole-open")
+            ApplyIcon(lockIcon, isLocked and "lock-keyhole" or "lock-keyhole-open")
         end
     end))
 end)
