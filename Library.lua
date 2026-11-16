@@ -17278,81 +17278,59 @@ end)
 function Library:RefreshFooterMarquee() StopFM(); local l = FindFooterLabel(); if l then SetupFM(l) end end
 function Library:StopFooterMarquee() StopFM() end
 
--- ═══ ⑧ Window 白オーラ外枠（モワモワ波版 v9） ═══
+-- ═══ ⑧ Window 白オーラ（ソフトグロー版 v11） ═══
 Library.WindowGlow = Library.WindowGlow or {
     Enabled = true,
+    Image = "rbxassetid://9968344227",   -- ソフトなドロップシャドウ/グロー画像
     Color = Color3.new(1, 1, 1),
-    Layers = 5,               -- 重ねるストローク数（多いほど滑らか）
-    BaseThickness = 1.5,      -- 各層の基本太さ
-    ThicknessAmp = 3.5,       -- 太さの揺れ幅
-    BaseTransparency = 0.75,  -- 基本の透明度（大きいほど薄い）
-    TransparencyAmp = 0.35,   -- 透明度の揺れ幅
-    Speed = 1.6,              -- 揺れの速さ
-    NoiseScale = 1.0,         -- 波の細かさ
+    Padding = 28,                        -- ウィンドウ外側への広がり
+    ImageTransparency = 0.4,             -- 0=くっきり / 1=透明
+    SliceScale = 0.12,                   -- ぼやけ具合（大きいほど強くぼける）
+    SliceCenter = Rect.new(96, 96, 416, 416),  -- 512x512想定の中央領域
 }
 
-local GlowStrokes = {}
-local GlowPhases = {}
+local GlowLabel = nil
 local GlowConn = nil
 
 local function RemoveGlow()
     if GlowConn then pcall(function() GlowConn:Disconnect() end); GlowConn = nil end
-    for _, s in ipairs(GlowStrokes) do pcall(function() s:Destroy() end) end
-    GlowStrokes = {}
-    GlowPhases = {}
+    if GlowLabel then pcall(function() GlowLabel:Destroy() end); GlowLabel = nil end
 end
 
 local function AttachGlow()
     RemoveGlow()
-    if not Library.WindowGlow.Enabled then return end
+    local cfg = Library.WindowGlow
+    if not cfg.Enabled then return end
     local W = Library.Window
     local mf = W and W.MainFrame
-    if not mf then return end
+    if not mf or not mf.Parent then return end
 
-    local cfg = Library.WindowGlow
+    local glow = Instance.new("ImageLabel")
+    glow.Name = "_WindowGlow"
+    glow.BackgroundTransparency = 1
+    glow.BorderSizePixel = 0
+    glow.Image = cfg.Image
+    glow.ImageColor3 = cfg.Color
+    glow.ImageTransparency = cfg.ImageTransparency
+    glow.ScaleType = Enum.ScaleType.Slice
+    glow.SliceCenter = cfg.SliceCenter
+    glow.SliceScale = cfg.SliceScale
+    glow.ZIndex = math.max(0, (mf.ZIndex or 1) - 1)
+    glow.Parent = mf.Parent
+    GlowLabel = glow
 
-    for i = 1, cfg.Layers do
-        local stroke = Instance.new("UIStroke")
-        stroke.Name = "_WindowGlow_" .. i
-        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-        stroke.Color = cfg.Color
-        stroke.Thickness = cfg.BaseThickness + (i - 1) * 0.4
-        stroke.Transparency = cfg.BaseTransparency
-        stroke.ZIndex = (mf.ZIndex or 1) + 1
-        stroke.Parent = mf
-        table.insert(GlowStrokes, stroke)
-        table.insert(GlowPhases, {
-            Offset = math.random() * math.pi * 2,
-            SpeedMul = 0.7 + math.random() * 0.8,
-            NoiseSeed = math.random() * 1000,
-            LayerFactor = i / cfg.Layers,
-        })
+    local function update()
+        if not glow.Parent or not mf.Parent then return end
+        if glow.Parent ~= mf.Parent then glow.Parent = mf.Parent end
+        local ap = mf.AbsolutePosition
+        local as = mf.AbsoluteSize
+        local pap = mf.Parent.AbsolutePosition
+        local pad = cfg.Padding
+        glow.Position = UDim2.fromOffset(ap.X - pap.X - pad, ap.Y - pap.Y - pad)
+        glow.Size = UDim2.fromOffset(as.X + pad * 2, as.Y + pad * 2)
     end
-
-    local t = 0
-    GlowConn = RunService.Heartbeat:Connect(function(dt)
-        t += dt * cfg.Speed
-        for i, stroke in ipairs(GlowStrokes) do
-            if not stroke.Parent then return end
-            local p = GlowPhases[i]
-            if not p then continue end
-
-            -- 位相ごとの sin + 高周波ノイズで「モワモワ」
-            local wave1 = math.sin(t * p.SpeedMul + p.Offset)
-            local wave2 = math.sin(t * p.SpeedMul * 2.3 + p.Offset * 1.7) * 0.4
-            local noise = math.noise(p.NoiseSeed, t * 0.8) * 0.6
-            local mix = (wave1 + wave2 + noise) / 2.0
-
-            -- 層の太さをランダムに揺らす（内側の層ほど控えめ）
-            local thickDelta = mix * cfg.ThicknessAmp * (1 - p.LayerFactor * 0.5)
-            stroke.Thickness = math.max(0.2, cfg.BaseThickness + (i - 1) * 0.4 + thickDelta)
-
-            -- 透明度も揺らして明滅感
-            local trans = cfg.BaseTransparency
-                + math.sin(t * p.SpeedMul * 0.9 + p.Offset * 1.3) * cfg.TransparencyAmp
-            stroke.Transparency = math.clamp(trans, 0.05, 0.98)
-        end
-    end)
+    update()
+    GlowConn = RunService.Heartbeat:Connect(update)
 end
 
 task.spawn(function()
