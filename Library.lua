@@ -17183,6 +17183,113 @@ function Library:CloseScript()
     end
 end
 --// === End Addon v4 ===
+--// === Panel X Buttons + Tab Active Indicator (Addon v5) ===
+local NH = Library.NotifHistory
+
+-- ① 履歴パネル / 確認ダイアログ の右上に X を追加
+local function AddCloseX(target, onClick)
+    if not target or not target.Parent then return end
+    if target:FindFirstChild("_PanelX") then return end
+
+    local btn = Instance.new("TextButton")
+    btn.Name = "_PanelX"
+    btn.BackgroundTransparency = 1
+    btn.AnchorPoint = Vector2.new(1, 0)
+    btn.Position = UDim2.new(1, -4, 0, 4)
+    btn.Size = UDim2.fromOffset(18, 18)
+    btn.Text = ""
+    btn.ZIndex = (target.ZIndex or 1) + 50
+    btn.Parent = target
+
+    local ic = Library:CreateIcon(Library:GetIcon("x"), {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromScale(0.9, 0.9),
+        ImageColor3 = Library.Scheme.FontColor or Color3.new(1, 1, 1),
+        Parent = btn,
+    }, true)
+    ic.ZIndex = btn.ZIndex
+
+    btn.MouseButton1Click:Connect(onClick)
+end
+
+-- 既存の OpenHistoryPanel をラップしてX付与を保証
+local _origOpenHistory = Library.OpenHistoryPanel
+function Library:OpenHistoryPanel(...)
+    if _origOpenHistory then _origOpenHistory(self, ...) end
+    if NH.Panel then
+        AddCloseX(NH.Panel, function() Library:CloseHistoryPanel() end)
+    end
+end
+
+-- 既存の ShowCloseConfirm をラップしてX付与を保証
+local _origShowConfirm = Library.ShowCloseConfirm
+function Library:ShowCloseConfirm(...)
+    if _origShowConfirm then _origShowConfirm(self, ...) end
+    if NH.Dialog then
+        AddCloseX(NH.Dialog, function() NH.Dialog.Visible = false end)
+    end
+end
+
+-- ② 選択中タブの左に縦線インジケータ
+local TabIndicators = setmetatable({}, { __mode = "k" })
+
+local function GetAccent()
+    return Library.Scheme.AccentColor or Color3.fromRGB(125, 85, 255)
+end
+
+local function EnsureIndicator(Tab)
+    if not Tab or not Tab.Button then return nil end
+    local btn = Tab.Button
+    local ind = TabIndicators[btn]
+    if ind and ind.Parent then return ind end
+
+    ind = Instance.new("Frame")
+    ind.Name = "_TabIndicator"
+    ind.BackgroundColor3 = GetAccent()
+    ind.BorderSizePixel = 0
+    ind.AnchorPoint = Vector2.new(0, 0.5)
+    ind.Position = UDim2.new(0, 0, 0.5, 0)
+    ind.Size = UDim2.new(0, 2, 1, -8)
+    ind.ZIndex = (btn.ZIndex or 1) + 5
+    ind.Visible = false
+    ind.Parent = btn
+    TabIndicators[btn] = ind
+    return ind
+end
+
+local function UpdateIndicators()
+    local active = Library.ActiveTab
+    for _, Tab in Library.Tabs do
+        if typeof(Tab) == "table" and Tab.Button and not Tab.IsKeyTab then
+            local ind = EnsureIndicator(Tab)
+            if ind then
+                ind.Visible = (Tab == active)
+                ind.BackgroundColor3 = GetAccent()
+            end
+        end
+    end
+end
+
+-- ActiveTab の変化を毎フレーム監視
+local _lastActiveTab = nil
+Library:GiveSignal(RunService.Heartbeat:Connect(function()
+    if Library.ActiveTab ~= _lastActiveTab then
+        _lastActiveTab = Library.ActiveTab
+        UpdateIndicators()
+    end
+end))
+
+-- 新規タブ追加・スキーム色変更にも追従（1秒ごと）
+task.spawn(function()
+    while not Library.Unloaded do
+        UpdateIndicators()
+        task.wait(1)
+    end
+end)
+
+function Library:RefreshTabIndicators() UpdateIndicators() end
+--// === End Addon v5 ===
 --// === Footer Marquee (Addon v3 Auto) ===
 Library.FooterMarquee = Library.FooterMarquee or {
     Enabled = true,
