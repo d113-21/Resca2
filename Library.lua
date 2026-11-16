@@ -17278,23 +17278,22 @@ end)
 function Library:RefreshFooterMarquee() StopFM(); local l = FindFooterLabel(); if l then SetupFM(l) end end
 function Library:StopFooterMarquee() StopFM() end
 
--- ═══ ⑧ Window 白オーラ（ソフトグロー版 v11） ═══
+-- ═══ ⑧ Window 白外枠グラデーション（v12） ═══
 Library.WindowGlow = Library.WindowGlow or {
     Enabled = true,
-    Image = "rbxassetid://9968344227",   -- ソフトなドロップシャドウ/グロー画像
     Color = Color3.new(1, 1, 1),
-    Padding = 28,                        -- ウィンドウ外側への広がり
-    ImageTransparency = 0.4,             -- 0=くっきり / 1=透明
-    SliceScale = 0.12,                   -- ぼやけ具合（大きいほど強くぼける）
-    SliceCenter = Rect.new(96, 96, 416, 416),  -- 512x512想定の中央領域
+    Layers = 8,                -- 段階数（多いほど滑らか）
+    InnerThickness = 1.5,      -- 一番内側の太さ
+    OuterThickness = 12,       -- 一番外側の太さ
+    InnerTransparency = 0.1,   -- 一番内側の濃さ（0=くっきり白）
+    OuterTransparency = 0.95,  -- 一番外側の薄さ（1=完全透明）
 }
 
-local GlowLabel = nil
-local GlowConn = nil
+local GlowStrokes = {}
 
 local function RemoveGlow()
-    if GlowConn then pcall(function() GlowConn:Disconnect() end); GlowConn = nil end
-    if GlowLabel then pcall(function() GlowLabel:Destroy() end); GlowLabel = nil end
+    for _, s in ipairs(GlowStrokes) do pcall(function() s:Destroy() end) end
+    GlowStrokes = {}
 end
 
 local function AttachGlow()
@@ -17303,34 +17302,24 @@ local function AttachGlow()
     if not cfg.Enabled then return end
     local W = Library.Window
     local mf = W and W.MainFrame
-    if not mf or not mf.Parent then return end
+    if not mf then return end
 
-    local glow = Instance.new("ImageLabel")
-    glow.Name = "_WindowGlow"
-    glow.BackgroundTransparency = 1
-    glow.BorderSizePixel = 0
-    glow.Image = cfg.Image
-    glow.ImageColor3 = cfg.Color
-    glow.ImageTransparency = cfg.ImageTransparency
-    glow.ScaleType = Enum.ScaleType.Slice
-    glow.SliceCenter = cfg.SliceCenter
-    glow.SliceScale = cfg.SliceScale
-    glow.ZIndex = math.max(0, (mf.ZIndex or 1) - 1)
-    glow.Parent = mf.Parent
-    GlowLabel = glow
+    local n = math.max(2, cfg.Layers)
+    for i = 1, n do
+        local t = (i - 1) / (n - 1) -- 0(内) → 1(外)
+        local thickness = cfg.InnerThickness + (cfg.OuterThickness - cfg.InnerThickness) * t
+        local trans = cfg.InnerTransparency + (cfg.OuterTransparency - cfg.InnerTransparency) * t
 
-    local function update()
-        if not glow.Parent or not mf.Parent then return end
-        if glow.Parent ~= mf.Parent then glow.Parent = mf.Parent end
-        local ap = mf.AbsolutePosition
-        local as = mf.AbsoluteSize
-        local pap = mf.Parent.AbsolutePosition
-        local pad = cfg.Padding
-        glow.Position = UDim2.fromOffset(ap.X - pap.X - pad, ap.Y - pap.Y - pad)
-        glow.Size = UDim2.fromOffset(as.X + pad * 2, as.Y + pad * 2)
+        local stroke = Instance.new("UIStroke")
+        stroke.Name = "_WindowGlow_" .. i
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Color = cfg.Color
+        stroke.Thickness = thickness
+        stroke.Transparency = trans
+        stroke.ZIndex = (mf.ZIndex or 1) + 1
+        stroke.Parent = mf
+        table.insert(GlowStrokes, stroke)
     end
-    update()
-    GlowConn = RunService.Heartbeat:Connect(update)
 end
 
 task.spawn(function()
