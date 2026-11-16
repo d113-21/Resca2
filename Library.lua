@@ -17339,7 +17339,7 @@ end)
 
 function Library:RefreshWindowGlow() AttachGlow() end
 function Library:StopWindowGlow() RemoveGlow() end
--- ═══ ⑨ Open Animation (v14) ═══
+-- ═══ ⑨ Open Animation (v15) ═══
 Library.OpenAnimation = Library.OpenAnimation or {
     Enabled = true,
     ImageId = "rbxassetid://99471060496611",
@@ -17349,9 +17349,11 @@ Library.OpenAnimation = Library.OpenAnimation or {
     TextHoldTime = 0.5,
     FadeOutTime = 0.4,
     ExpandTime = 0.45,
-    ResizeTime = 0.6,
-    WindowFadeTime = 0.55,
+    ResizeTime = 0.7,
+    CornerRadius = 18,
 }
+
+local OpenAnimPlayed = false
 
 local function BuildSplashGlow(frame)
     local strokes = {}
@@ -17386,7 +17388,7 @@ function Library:PlayOpenAnimation(callback)
 
     -- レイアウト確定待ち
     local tries = 0
-    while (mf.AbsoluteSize.X < 10 or mf.AbsoluteSize.Y < 10) and tries < 60 do
+    while (mf.AbsoluteSize.X < 10 or mf.AbsoluteSize.Y < 10) and tries < 120 do
         RunService.RenderStepped:Wait(); tries += 1
     end
 
@@ -17409,11 +17411,10 @@ function Library:PlayOpenAnimation(callback)
     splash.BackgroundTransparency = 1
     splash.ZIndex = 9000
     splash.Parent = sg
-    Instance.new("UICorner", splash).CornerRadius = UDim.new(0, 6)
+    Instance.new("UICorner", splash).CornerRadius = UDim.new(0, cfg.CornerRadius)
 
     local glowStrokes = BuildSplashGlow(splash)
 
-    -- 画像
     local img = Instance.new("ImageLabel")
     img.Name = "SplashImage"
     img.BackgroundTransparency = 1
@@ -17425,9 +17426,8 @@ function Library:PlayOpenAnimation(callback)
     img.ImageTransparency = 1
     img.ZIndex = splash.ZIndex + 2
     img.Parent = splash
-    Instance.new("UICorner", img).CornerRadius = UDim.new(0, 4)
+    Instance.new("UICorner", img).CornerRadius = UDim.new(0, math.max(2, cfg.CornerRadius - 4))
 
-    -- タイトル
     local textLabel = Instance.new("TextLabel")
     textLabel.Name = "SplashTitle"
     textLabel.BackgroundTransparency = 1
@@ -17446,12 +17446,11 @@ function Library:PlayOpenAnimation(callback)
     tp.PaddingRight = UDim.new(0, 16)
 
     local fullText = cfg.Title
-    local textWidth = #fullText * 14 + 60
+    local textWidth = 260
     pcall(function()
         local tw = Library:GetTextBounds(fullText, Library.Scheme.Font, 22, 500)
         if tw and tw > 0 then textWidth = tw + 40 end
     end)
-    textWidth = math.max(textWidth, 200)
 
     -- フェードイン
     local fadeIn = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
@@ -17459,15 +17458,16 @@ function Library:PlayOpenAnimation(callback)
     TweenService:Create(img, fadeIn, { ImageTransparency = 0 }):Play()
     task.wait(0.3)
 
-    -- ① フレームを横に伸ばす
-    local expandInfo = TweenInfo.new(cfg.ExpandTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local expandTween = TweenService:Create(splash, expandInfo, {
-        Size = UDim2.fromOffset(imgSize + textWidth, imgSize),
-    })
+    -- 横展開
+    local expandTween = TweenService:Create(
+        splash,
+        TweenInfo.new(cfg.ExpandTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        { Size = UDim2.fromOffset(imgSize + textWidth, imgSize) }
+    )
     expandTween:Play()
     expandTween.Completed:Wait()
 
-    -- ② タイプライター
+    -- タイプライター
     local len = utf8.len(fullText) or #fullText
     for i = 1, len do
         local nxt = utf8.offset(fullText, i + 1)
@@ -17476,56 +17476,68 @@ function Library:PlayOpenAnimation(callback)
     end
     textLabel.Text = fullText
 
-    -- ③ ホールド → フェードアウト
+    -- ホールド → フェードアウト
     task.wait(cfg.TextHoldTime)
-    local fadeOutInfo = TweenInfo.new(cfg.FadeOutTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    TweenService:Create(textLabel, fadeOutInfo, { TextTransparency = 1 }):Play()
+    TweenService:Create(
+        textLabel,
+        TweenInfo.new(cfg.FadeOutTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+        { TextTransparency = 1 }
+    ):Play()
     task.wait(cfg.FadeOutTime)
 
-    -- ④ フレームを Window サイズへ、画像を左上アイコン位置へ
+    -- リサイズ先計算
     local wp, ws = mf.AbsolutePosition, mf.AbsoluteSize
     local targetCx = wp.X + ws.X / 2
     local targetCy = wp.Y + ws.Y / 2
-
     local iconSize = 30
     if W.IconSize and W.IconSize.X.Offset and W.IconSize.X.Offset > 0 then
         iconSize = W.IconSize.X.Offset
     end
 
+    -- ★ Window を先に表示（スプラッシュの裏に隠れる）
+    mf.Visible = true
+
+    -- ★ リサイズと同時にスプラッシュをフェードアウト
     local resizeInfo = TweenInfo.new(cfg.ResizeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    local resizeTween = TweenService:Create(splash, resizeInfo, {
+    local fadeInfo = TweenInfo.new(cfg.ResizeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+    TweenService:Create(splash, resizeInfo, {
         Position = UDim2.fromOffset(targetCx, targetCy),
         Size = UDim2.fromOffset(ws.X, ws.Y),
-    })
-    resizeTween:Play()
+        BackgroundTransparency = 1,
+    }):Play()
+    TweenService:Create(splash, TweenInfo.new(cfg.ResizeTime, Enum.EasingStyle.Linear), {
+        BackgroundTransparency = 1,
+    }):Play()
     TweenService:Create(img, resizeInfo, {
         Size = UDim2.fromOffset(iconSize, iconSize),
         Position = UDim2.fromOffset(10, 10),
+        ImageTransparency = 1,
     }):Play()
-    resizeTween.Completed:Wait()
-
-    -- ⑤ Window を表示してスプラッシュをフェードアウト
-    mf.Visible = true
-    local revealInfo = TweenInfo.new(cfg.WindowFadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-    TweenService:Create(splash, revealInfo, { BackgroundTransparency = 1 }):Play()
     for _, s in ipairs(glowStrokes) do
-        TweenService:Create(s, revealInfo, { Transparency = 1 }):Play()
+        TweenService:Create(s, fadeInfo, { Transparency = 1 }):Play()
     end
-    task.wait(cfg.WindowFadeTime)
 
+    task.wait(cfg.ResizeTime + 0.05)
     splash:Destroy()
+    OpenAnimPlayed = true
     if callback then callback() end
 end
 
--- Window 初回生成時に自動再生
-task.spawn(function()
-    while not Library.Unloaded do
-        if Library.Window and Library.Window.MainFrame then
-            task.wait(0.2)
+-- Window 生成の瞬間に非表示にする（ちらつき防止・RenderSteppedで先回り）
+do
+    local conn
+    conn = RunService.RenderStepped:Connect(function()
+        if Library.Unloaded then conn:Disconnect(); return end
+        local W = Library.Window
+        if W and W.MainFrame then
+            if not OpenAnimPlayed and Library.OpenAnimation.Enabled then
+                W.MainFrame.Visible = false
+            end
+            conn:Disconnect()
+            task.wait(0.05)
             pcall(function() Library:PlayOpenAnimation() end)
-            break
         end
-        task.wait(0.1)
-    end
-end)
+    end)
+end
 return Library
