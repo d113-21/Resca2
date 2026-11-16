@@ -17086,60 +17086,123 @@ function Library:CloseScript()
     end
 end
 --// === End Addon v3 ===
---// === Follow Window (Addon) ===
-Library:GiveSignal(RunService.Heartbeat:Connect(function()
-    local W = Library.Window
-    if not W or not W.MainFrame then return end
-    local mf = W.MainFrame
-    if not mf.Parent or not mf.Visible then return end
+--// === Footer Marquee (Addon v3 Auto) ===
+Library.FooterMarquee = Library.FooterMarquee or {
+    Enabled = true,
+    Speed = 60,
+    Gap = 80,
+}
 
-    local wp = mf.AbsolutePosition
-    local ws = mf.AbsoluteSize
-    local cam = workspace.CurrentCamera
-    local vw = cam and cam.ViewportSize.X or 1920
-    local vh = cam and cam.ViewportSize.Y or 1080
+local FM = { Active=false, Conn=nil, Clip=nil, Label=nil, X=0, W=0, PW=0 }
 
-    -- 履歴パネル：ウィンドウ右外側に配置（画面外なら左外側、それも無理なら内側）
-    if HistoryPanel and HistoryPanel.Parent and HistoryPanel.Visible then
-        local pw = HistoryPanel.AbsoluteSize.X
-        local ph = HistoryPanel.AbsoluteSize.Y
-        if pw <= 0 then pw = 340 end
-        if ph <= 0 then ph = 380 end
+local function StopFM()
+    FM.Active = false
+    if FM.Conn then pcall(function() FM.Conn:Disconnect() end) FM.Conn = nil end
+end
 
-        local rightX = wp.X + ws.X + 8
-        local leftX = wp.X - pw - 8
+local function FindFooterLabel()
+    local sg = Library.ScreenGui
+    if not sg then return nil end
+    local txt = Library.Window and Library.Window.Footer
+    local exact, partial, named, bottom
+    local bottomY = -math.huge
+    for _, D in sg:GetDescendants() do
+        if D:IsA("TextLabel") and D.Visible and D.Text ~= "" then
+            -- 既にマーキー化済みはスキップ
+            local p = D.Parent
+            if p and p.Name == "_FMClip" then return D end
 
-        local x, y
-        if rightX + pw <= vw - 8 then
-            x = rightX
-            y = wp.Y + 40
-        elseif leftX >= 8 then
-            x = leftX
-            y = wp.Y + 40
-        else
-            -- 画面内側右上
-            x = wp.X + ws.X - pw - 12
-            y = wp.Y + 40
+            if typeof(txt) == "string" and txt ~= "" then
+                if D.Text == txt then exact = exact or D end
+                if not partial and D.Text:find(txt, 1, true) then partial = D end
+            end
+            if not named and string.lower(D.Name):find("footer") then named = D end
+
+            local ay = D.AbsolutePosition.Y
+            if ay > bottomY then bottomY = ay; bottom = D end
         end
+    end
+    return exact or partial or named or bottom
+end
 
-        if y + ph > vh - 8 then
-            y = math.max(8, vh - ph - 8)
-        end
-        if y < 8 then y = 8 end
-        if x < 8 then x = 8 end
-        if x + pw > vw - 8 then x = vw - pw - 8 end
+local function Setup(label)
+    if not label or not label.Parent then return end
+    local parent = label.Parent
+    if not parent:IsA("GuiObject") then return end
 
-        HistoryPanel.AnchorPoint = Vector2.new(0, 0)
-        HistoryPanel.Position = UDim2.fromOffset(x, y)
+    -- 既にラップ済みなら再開
+    if parent.Name == "_FMClip" then
+        FM.Clip = parent
+        FM.Label = label
+    else
+        local clip = Instance.new("Frame")
+        clip.Name = "_FMClip"
+        clip.BackgroundTransparency = 1
+        clip.BorderSizePixel = 0
+        clip.ClipsDescendants = true
+        clip.Size = label.Size
+        clip.Position = label.Position
+        clip.AnchorPoint = label.AnchorPoint
+        clip.LayoutOrder = label.LayoutOrder
+        clip.ZIndex = label.ZIndex
+        clip.Parent = parent
+
+        label.AnchorPoint = Vector2.new(0, 0)
+        label.Position = UDim2.new(0, 0, 0, 0)
+        label.Size = UDim2.new(0, 5000, 1, 0)
+        label.Parent = clip
+        FM.Clip = clip
+        FM.Label = label
     end
 
-    -- 確認ダイアログ：ウィンドウ中央
-    if ConfirmDialog and ConfirmDialog.Parent and ConfirmDialog.Visible then
-        local cx = wp.X + ws.X / 2
-        local cy = wp.Y + ws.Y / 2
-        ConfirmDialog.AnchorPoint = Vector2.new(0.5, 0.5)
-        ConfirmDialog.Position = UDim2.fromOffset(cx, cy)
+    label.TextWrapped = false
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.TextTruncate = Enum.TextTruncate.None
+    pcall(function() label.AutomaticSize = Enum.AutomaticSize.None end)
+
+    task.spawn(function()
+        local clip = FM.Clip
+        for _ = 1, 40 do
+            if clip.AbsoluteSize.X > 1 and label.TextBounds.X > 1 then break end
+            task.wait(0.1)
+        end
+        local pw = clip.AbsoluteSize.X
+        if pw <= 1 then return end
+        local tw = label.TextBounds.X
+        if tw <= 1 then tw = 200 end
+        local total = tw + Library.FooterMarquee.Gap
+
+        label.Size = UDim2.new(0, total, 1, 0)
+        label.Position = UDim2.new(0, pw, 0, 0)
+
+        FM.PW, FM.W, FM.X = pw, total, pw
+        StopFM()
+        FM.Active = true
+        FM.Conn = RunService.RenderStepped:Connect(function(dt)
+            if not FM.Active then return end
+            if not label.Parent or not clip.Parent then StopFM() return end
+            FM.X = FM.X - math.max(1, Library.FooterMarquee.Speed) * dt
+            if FM.X <= -FM.W then FM.X = FM.PW end
+            label.Position = UDim2.new(0, FM.X, 0, 0)
+        end)
+    end)
+end
+
+task.spawn(function()
+    while not Library.Unloaded do
+        if Library.FooterMarquee.Enabled and not FM.Active then
+            local l = FindFooterLabel()
+            if l then Setup(l) end
+        end
+        task.wait(0.5)
     end
-end))
---// === End Follow Window ===
+end)
+
+function Library:RefreshFooterMarquee()
+    StopFM()
+    local l = FindFooterLabel()
+    if l then Setup(l) end
+end
+function Library:StopFooterMarquee() StopFM() end
+--// === End Footer Marquee v3 ===
 return Library
