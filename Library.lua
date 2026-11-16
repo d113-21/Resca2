@@ -17358,4 +17358,96 @@ function Library:StopWindowGlow() RemoveGlow() end
     OpenAnimPlayed = true
     if callback then callback() end
 end
+-- ═══ ⑩ Toggle / Lock アイコン動的差し替え（v18） ═══
+Library.ButtonIconState = Library.ButtonIconState or {
+    ToggleOn  = "eye-off",          -- ウィンドウ表示中
+    ToggleOff = "eye",              -- ウィンドウ非表示
+    LockOpen  = "lock-keyhole-open",-- アンロック
+    LockClosed= "lock-keyhole",     -- ロック中
+}
+
+local function FindActionButton(keywordList)
+    local floats = Library.Floats
+    if not floats then return nil end
+    for _, child in ipairs(floats:GetChildren()) do
+        if child:IsA("GuiButton") then
+            for _, d in ipairs(child:GetDescendants()) do
+                if d:IsA("ImageLabel") or d:IsA("ImageButton") then
+                    local img = tostring(d.Image or "")
+                    for _, kw in ipairs(keywordList) do
+                        if img:find(kw, 1, true) then return child, d end
+                    end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- 初回検出（アイコン生成待ち）
+local ToggleBtn, ToggleIcon
+local LockBtn, LockIcon
+local detectTries = 0
+task.spawn(function()
+    while not Library.Unloaded and detectTries < 300 do
+        if not ToggleBtn then
+            ToggleBtn, ToggleIcon = FindActionButton({ "eye" })
+        end
+        if not LockBtn then
+            LockBtn, LockIcon = FindActionButton({ "lock-keyhole", "lock" })
+        end
+        if ToggleBtn and LockBtn then break end
+        detectTries += 1
+        task.wait(0.1)
+    end
+end)
+
+-- アイコン差し替え
+local function SetIcon(iconLabel, lucideName)
+    if not iconLabel or not iconLabel.Parent then return end
+    local iconData = Library:GetCustomIcon(lucideName)
+    if not iconData or not iconData.Url then return end
+    if iconLabel.Image ~= iconData.Url then
+        iconLabel.Image = iconData.Url
+    end
+end
+
+-- 状態監視
+local lastToggled = nil
+local lastLocked = nil
+
+Library:GiveSignal(RunService.Heartbeat:Connect(function()
+    if not ToggleBtn or not ToggleBtn.Parent then
+        ToggleBtn, ToggleIcon = FindActionButton({ "eye" })
+    end
+    if not LockBtn or not LockBtn.Parent then
+        LockBtn, LockIcon = FindActionButton({ "lock-keyhole", "lock" })
+    end
+
+    -- Toggle: Window表示状態
+    local isVisible = Library.Toggled
+    if isVisible ~= lastToggled then
+        lastToggled = isVisible
+        local name = isVisible and Library.ButtonIconState.ToggleOn or Library.ButtonIconState.ToggleOff
+        SetIcon(ToggleIcon, name)
+    end
+
+    -- Lock: ドラッグ固定状態（CantDragForced をロックとみなす）
+    local isLocked = Library.CantDragForced
+    if isLocked ~= lastLocked then
+        lastLocked = isLocked
+        local name = isLocked and Library.ButtonIconState.LockClosed or Library.ButtonIconState.LockOpen
+        SetIcon(LockIcon, name)
+    end
+end))
+
+-- 手動リフレッシュ
+function Library:RefreshActionButtonIcons()
+    if ToggleIcon then
+        SetIcon(ToggleIcon, Library.Toggled and Library.ButtonIconState.ToggleOn or Library.ButtonIconState.ToggleOff)
+    end
+    if LockIcon then
+        SetIcon(LockIcon, Library.CantDragForced and Library.ButtonIconState.LockClosed or Library.ButtonIconState.LockOpen)
+    end
+end
 return Library
