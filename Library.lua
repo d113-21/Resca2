@@ -17278,24 +17278,28 @@ end)
 function Library:RefreshFooterMarquee() StopFM(); local l = FindFooterLabel(); if l then SetupFM(l) end end
 function Library:StopFooterMarquee() StopFM() end
 
---// === End Addons Pack v8 ===
--- ═══ ⑧ Window 白オーラ外枠 ═══
+-- ═══ ⑧ Window 白オーラ外枠（モワモワ波版 v9） ═══
 Library.WindowGlow = Library.WindowGlow or {
     Enabled = true,
     Color = Color3.new(1, 1, 1),
-    Thickness = 2,          -- 外枠の太さ
-    Transparency = 0.4,     -- 0=くっきり / 1=透明
-    Pulse = true,           -- ふわっと明滅
-    PulseMin = 0.3,         -- 明滅の最小透明度（小さいほど強く光る）
-    PulseSpeed = 2.0,       -- 明滅速度
+    Layers = 5,               -- 重ねるストローク数（多いほど滑らか）
+    BaseThickness = 1.5,      -- 各層の基本太さ
+    ThicknessAmp = 3.5,       -- 太さの揺れ幅
+    BaseTransparency = 0.75,  -- 基本の透明度（大きいほど薄い）
+    TransparencyAmp = 0.35,   -- 透明度の揺れ幅
+    Speed = 1.6,              -- 揺れの速さ
+    NoiseScale = 1.0,         -- 波の細かさ
 }
 
-local GlowStroke = nil
+local GlowStrokes = {}
+local GlowPhases = {}
 local GlowConn = nil
 
 local function RemoveGlow()
     if GlowConn then pcall(function() GlowConn:Disconnect() end); GlowConn = nil end
-    if GlowStroke then pcall(function() GlowStroke:Destroy() end); GlowStroke = nil end
+    for _, s in ipairs(GlowStrokes) do pcall(function() s:Destroy() end) end
+    GlowStrokes = {}
+    GlowPhases = {}
 end
 
 local function AttachGlow()
@@ -17305,29 +17309,52 @@ local function AttachGlow()
     local mf = W and W.MainFrame
     if not mf then return end
 
-    local stroke = Instance.new("UIStroke")
-    stroke.Name = "_WindowGlow"
-    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    stroke.Color = Library.WindowGlow.Color
-    stroke.Thickness = Library.WindowGlow.Thickness
-    stroke.Transparency = Library.WindowGlow.Transparency
-    stroke.ZIndex = (mf.ZIndex or 1) + 1
-    stroke.Parent = mf
-    GlowStroke = stroke
+    local cfg = Library.WindowGlow
 
-    if Library.WindowGlow.Pulse then
-        local t = 0
-        GlowConn = RunService.Heartbeat:Connect(function(dt)
-            if not GlowStroke or not GlowStroke.Parent then return end
-            t += dt * Library.WindowGlow.PulseSpeed
-            local mid = (Library.WindowGlow.Transparency + Library.WindowGlow.PulseMin) / 2
-            local amp = (Library.WindowGlow.Transparency - Library.WindowGlow.PulseMin) / 2
-            GlowStroke.Transparency = mid + math.sin(t) * amp
-        end)
+    for i = 1, cfg.Layers do
+        local stroke = Instance.new("UIStroke")
+        stroke.Name = "_WindowGlow_" .. i
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Color = cfg.Color
+        stroke.Thickness = cfg.BaseThickness + (i - 1) * 0.4
+        stroke.Transparency = cfg.BaseTransparency
+        stroke.ZIndex = (mf.ZIndex or 1) + 1
+        stroke.Parent = mf
+        table.insert(GlowStrokes, stroke)
+        table.insert(GlowPhases, {
+            Offset = math.random() * math.pi * 2,
+            SpeedMul = 0.7 + math.random() * 0.8,
+            NoiseSeed = math.random() * 1000,
+            LayerFactor = i / cfg.Layers,
+        })
     end
+
+    local t = 0
+    GlowConn = RunService.Heartbeat:Connect(function(dt)
+        t += dt * cfg.Speed
+        for i, stroke in ipairs(GlowStrokes) do
+            if not stroke.Parent then return end
+            local p = GlowPhases[i]
+            if not p then continue end
+
+            -- 位相ごとの sin + 高周波ノイズで「モワモワ」
+            local wave1 = math.sin(t * p.SpeedMul + p.Offset)
+            local wave2 = math.sin(t * p.SpeedMul * 2.3 + p.Offset * 1.7) * 0.4
+            local noise = math.noise(p.NoiseSeed, t * 0.8) * 0.6
+            local mix = (wave1 + wave2 + noise) / 2.0
+
+            -- 層の太さをランダムに揺らす（内側の層ほど控えめ）
+            local thickDelta = mix * cfg.ThicknessAmp * (1 - p.LayerFactor * 0.5)
+            stroke.Thickness = math.max(0.2, cfg.BaseThickness + (i - 1) * 0.4 + thickDelta)
+
+            -- 透明度も揺らして明滅感
+            local trans = cfg.BaseTransparency
+                + math.sin(t * p.SpeedMul * 0.9 + p.Offset * 1.3) * cfg.TransparencyAmp
+            stroke.Transparency = math.clamp(trans, 0.05, 0.98)
+        end
+    end)
 end
 
--- ウィンドウ生成待ち → 付与
 task.spawn(function()
     while not Library.Unloaded do
         if Library.Window and Library.Window.MainFrame then
@@ -17338,10 +17365,6 @@ task.spawn(function()
     end
 end)
 
--- 手動API
 function Library:RefreshWindowGlow() AttachGlow() end
-function Library:StopWindowGlow()
-    if GlowStroke then pcall(function() GlowStroke:Destroy() end); GlowStroke = nil end
-    if GlowConn then pcall(function() GlowConn:Disconnect() end); GlowConn = nil end
-end
+function Library:StopWindowGlow() RemoveGlow() end
 return Library
