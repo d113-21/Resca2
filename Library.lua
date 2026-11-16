@@ -17338,4 +17338,104 @@ end)
 
 function Library:RefreshWindowGlow() AttachGlow() end
 function Library:StopWindowGlow() RemoveGlow() end
+-- ═══ Toggle / Lock ボタンをアイコン化 (v21) ═══
+task.spawn(function()
+    -- LibraryとWindowの生成を待つ
+    local waited = 0
+    while not Library.Unloaded and waited < 100 do
+        if Library.Floats and Library.Window and Library.Window.MainFrame then break end
+        task.wait(0.1); waited += 1
+    end
+    task.wait(1) -- 少し待って確実に生成させる
+
+    local ToggleBtn, LockBtn
+
+    -- テキストからボタンを探す関数
+    local function FindButtonByText(targetText)
+        local ok, result = pcall(function()
+            for _, child in ipairs(Library.Floats:GetChildren()) do
+                if child:IsA("GuiButton") then
+                    -- ボタン自体にテキストがある場合
+                    if child.Text == targetText then return child end
+                    -- ボタンの子にTextLabelがある場合
+                    for _, d in ipairs(child:GetDescendants()) do
+                        if d:IsA("TextLabel") and d.Text == targetText then
+                            return child
+                        end
+                    end
+                end
+            end
+        end)
+        return ok and result or nil
+    end
+
+    -- ボタンをアイコン化する関数
+    local function MakeIconButton(btn, iconName)
+        if not btn or not btn.Parent then return end
+        
+        -- 元のテキストを消す
+        if btn:IsA("TextButton") or btn:IsA("TextLabel") then
+            btn.Text = ""
+        end
+        for _, d in ipairs(btn:GetDescendants()) do
+            if d:IsA("TextLabel") or d:IsA("TextButton") then
+                d.Text = ""
+            end
+        end
+
+        -- アイコン画像を作成・更新
+        local iconImg = btn:FindFirstChild("_MyLucideIcon")
+        if not iconImg then
+            iconImg = Instance.new("ImageLabel")
+            iconImg.Name = "_MyLucideIcon"
+            iconImg.BackgroundTransparency = 1
+            iconImg.AnchorPoint = Vector2.new(0.5, 0.5)
+            iconImg.Position = UDim2.fromScale(0.5, 0.5)
+            iconImg.Size = UDim2.fromOffset(20, 20) -- アイコンサイズ
+            iconImg.ScaleType = Enum.ScaleType.Fit
+            iconImg.ZIndex = btn.ZIndex + 1
+            iconImg.Parent = btn
+        end
+
+        -- lucideアイコンを取得して設定
+        local iconData = Library:GetCustomIcon(iconName)
+        if iconData and iconData.Url then
+            iconImg.Image = iconData.Url
+            iconImg.ImageColor3 = Library.Scheme.FontColor or Color3.new(1, 1, 1)
+        end
+    end
+
+    -- ボタンの検出
+    ToggleBtn = FindButtonByText("Toggle")
+    LockBtn = FindButtonByText("Lock")
+
+    -- 状態監視とアイコン切り替えループ
+    local lastToggled, lastLocked
+    Library:GiveSignal(RunService.Heartbeat:Connect(function()
+        if not ToggleBtn or not ToggleBtn.Parent then
+            ToggleBtn = FindButtonByText("Toggle")
+        end
+        if not LockBtn or not LockBtn.Parent then
+            LockBtn = FindButtonByText("Lock")
+        end
+
+        -- Toggle の状態 (Windowが表示されているか)
+        if ToggleBtn then
+            local isVisible = Library.Toggled
+            if isVisible ~= lastToggled then
+                lastToggled = isVisible
+                MakeIconButton(ToggleBtn, isVisible and "eye-off" or "eye")
+            end
+        end
+
+        -- Lock の状態 (ドラッグ固定されているか)
+        if LockBtn then
+            local isLocked = Library.CantDragForced
+            if isLocked ~= lastLocked then
+                lastLocked = isLocked
+                MakeIconButton(LockBtn, isLocked and "lock-keyhole" or "lock-keyhole-open")
+            end
+        end
+    end))
+end)
 return Library
