@@ -17086,99 +17086,60 @@ function Library:CloseScript()
     end
 end
 --// === End Addon v3 ===
---// === Footer Marquee (Addon) ===
-Library.FooterMarquee = Library.FooterMarquee or {
-    Enabled = true,
-    Speed = 60,           -- ピクセル/秒（大きいほど速い）
-    Gap = 80,             -- テキストの繰り返し間隔
-}
+--// === Follow Window (Addon) ===
+Library:GiveSignal(RunService.Heartbeat:Connect(function()
+    local W = Library.Window
+    if not W or not W.MainFrame then return end
+    local mf = W.MainFrame
+    if not mf.Parent or not mf.Visible then return end
 
-local FooterLabel, FooterClip, FooterTween
+    local wp = mf.AbsolutePosition
+    local ws = mf.AbsoluteSize
+    local cam = workspace.CurrentCamera
+    local vw = cam and cam.ViewportSize.X or 1920
+    local vh = cam and cam.ViewportSize.Y or 1080
 
-local function FindFooterLabel()
-    if not Library.ScreenGui or not Library.Window then return nil end
-    local footerText = Library.Window.Footer
-    if typeof(footerText) ~= "string" or footerText == "" then return nil end
+    -- 履歴パネル：ウィンドウ右外側に配置（画面外なら左外側、それも無理なら内側）
+    if HistoryPanel and HistoryPanel.Parent and HistoryPanel.Visible then
+        local pw = HistoryPanel.AbsoluteSize.X
+        local ph = HistoryPanel.AbsoluteSize.Y
+        if pw <= 0 then pw = 340 end
+        if ph <= 0 then ph = 380 end
 
-    -- Window配下のTextLabelでFooter文字列と一致するものを探す
-    local Main = Library.Window.MainFrame
-    local searchRoot = Main or Library.ScreenGui
-    for _, D in searchRoot:GetDescendants() do
-        if D:IsA("TextLabel") and D.Text == footerText then
-            return D
+        local rightX = wp.X + ws.X + 8
+        local leftX = wp.X - pw - 8
+
+        local x, y
+        if rightX + pw <= vw - 8 then
+            x = rightX
+            y = wp.Y + 40
+        elseif leftX >= 8 then
+            x = leftX
+            y = wp.Y + 40
+        else
+            -- 画面内側右上
+            x = wp.X + ws.X - pw - 12
+            y = wp.Y + 40
         end
-    end
-    return nil
-end
 
-local function StopFooterMarquee()
-    if FooterTween then
-        pcall(function() FooterTween:Cancel() end)
-        FooterTween = nil
-    end
-    if FooterLabel then
-        pcall(function() FooterLabel.Position = UDim2.new(0, 0, FooterLabel.Position.Y.Scale, FooterLabel.Position.Y.Offset) end)
-    end
-end
-
-local function StartFooterMarquee()
-    StopFooterMarquee()
-    if not Library.FooterMarquee.Enabled then return end
-
-    local Label = FindFooterLabel()
-    if not Label then return end
-    FooterLabel = Label
-
-    local parent = Label.Parent
-    if not parent or not parent:IsA("GuiObject") then return end
-
-    -- 親をクリップ領域に
-    parent.ClipsDescendants = true
-
-    -- ラベルを親幅より広く、テキストが収まるサイズに
-    Label.TextXAlignment = Enum.TextXAlignment.Left
-    Label.TextWrapped = false
-
-    local textWidth = Label.TextBounds.X
-    local parentWidth = parent.AbsoluteSize.X
-    if parentWidth <= 0 then task.wait(0.2); parentWidth = parent.AbsoluteSize.X end
-    if textWidth <= 0 then task.wait(0.2); textWidth = Label.TextBounds.X end
-
-    -- ラベルの幅を「親幅 + テキスト幅 + Gap」に
-    local totalWidth = parentWidth + textWidth + Library.FooterMarquee.Gap
-    Label.Size = UDim2.new(0, totalWidth, Label.Size.Y.Scale, Label.Size.Y.Offset)
-
-    -- 初期位置：右端の外からスタート
-    Label.Position = UDim2.new(0, parentWidth, Label.Position.Y.Scale, Label.Position.Y.Offset)
-
-    -- 左端の外まで移動
-    local distance = parentWidth + totalWidth + Library.FooterMarquee.Gap
-    local duration = distance / math.max(1, Library.FooterMarquee.Speed)
-
-    local Info = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1)
-    FooterTween = TweenService:Create(Label, Info, {
-        Position = UDim2.new(0, -totalWidth, Label.Position.Y.Scale, Label.Position.Y.Offset),
-    })
-    FooterTween:Play()
-end
-
-task.spawn(function()
-    -- Footerが生成されるまで待つ
-    while not Library.Unloaded do
-        if FindFooterLabel() then
-            StartFooterMarquee()
-            break
+        if y + ph > vh - 8 then
+            y = math.max(8, vh - ph - 8)
         end
-        task.wait(0.5)
+        if y < 8 then y = 8 end
+        if x < 8 then x = 8 end
+        if x + pw > vw - 8 then x = vw - pw - 8 end
+
+        HistoryPanel.AnchorPoint = Vector2.new(0, 0)
+        HistoryPanel.Position = UDim2.fromOffset(x, y)
     end
-end)
 
-function Library:RefreshFooterMarquee()
-    StartFooterMarquee()
-end
-
-function Library:StopFooterMarquee()
-    StopFooterMarquee()
-end
---// === End Footer Marquee ===
+    -- 確認ダイアログ：ウィンドウ中央
+    if ConfirmDialog and ConfirmDialog.Parent and ConfirmDialog.Visible then
+        local cx = wp.X + ws.X / 2
+        local cy = wp.Y + ws.Y / 2
+        ConfirmDialog.AnchorPoint = Vector2.new(0.5, 0.5)
+        ConfirmDialog.Position = UDim2.fromOffset(cx, cy)
+    end
+end))
+--// === End Follow Window ===
 return Library
