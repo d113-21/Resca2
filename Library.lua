@@ -17358,97 +17358,38 @@ function Library:StopWindowGlow() RemoveGlow() end
     OpenAnimPlayed = true
     if callback then callback() end
 end
--- ═══ ⑩ Toggle / Lock アイコン動的差し替え（v19 安全版） ═══
-Library.ButtonIconState = Library.ButtonIconState or {
-    ToggleOn  = "eye-off",
-    ToggleOff = "eye",
-    LockOpen  = "lock-keyhole-open",
-    LockClosed= "lock-keyhole",
-}
-
+-- ═══ ⑩ Toggle/Lock アイコン診断（v20 安全版） ═══
 task.spawn(function()
-    -- Window とアニメーション完了を待つ
-    local waited = 0
-    while not Library.Unloaded and waited < 600 do
-        if Library.Window and Library.Window.MainFrame then break end
-        task.wait(0.1); waited += 1
-    end
-    task.wait(4)  -- オープンアニメが終わるまで待つ（必要なら増やす）
-
+    task.wait(10)  -- オープンアニメ完了まで十分待つ
     if Library.Unloaded then return end
 
-    local ToggleBtn, ToggleIcon, LockBtn, LockIcon
+    local Sg = game:GetService("StarterGui")
+    local function N(t, x) pcall(function()
+        Sg:SetCore("SendNotification", {Title=t, Text=x, Duration=8})
+    end) end
 
-    local function FindIconButton(keywords)
-        local ok, result = pcall(function()
-            local floats = Library.Floats
-            if not floats then return nil end
-            for _, child in ipairs(floats:GetChildren()) do
-                if child:IsA("GuiButton") then
-                    for _, d in ipairs(child:GetDescendants()) do
-                        if d:IsA("ImageLabel") or d:IsA("ImageButton") then
-                            local img = tostring(d.Image or "")
-                            for _, kw in ipairs(keywords) do
-                                if img:find(kw, 1, true) then return child, d end
-                            end
-                        end
-                    end
+    if not Library.Floats then N("Diag", "Floats なし"); return end
+
+    local guiButtons = 0
+    local eyeFound = false
+    local lockFound = false
+
+    for _, child in ipairs(Library.Floats:GetChildren()) do
+        if child:IsA("GuiButton") then
+            guiButtons += 1
+            for _, d in ipairs(child:GetDescendants()) do
+                if d:IsA("ImageLabel") or d:IsA("ImageButton") then
+                    local img = tostring(d.Image or "")
+                    if img:find("eye") then eyeFound = true end
+                    if img:find("lock") then lockFound = true end
                 end
             end
-            return nil
-        end)
-        if ok then return result end
-        return nil
+        end
     end
 
-    -- 検出（最大20秒）
-    local tries = 0
-    while not Library.Unloaded and tries < 100 do
-        if not ToggleBtn then ToggleBtn, ToggleIcon = FindIconButton({ "eye" }) end
-        if not LockBtn then LockBtn, LockIcon = FindIconButton({ "lock-keyhole", "lock" }) end
-        if ToggleBtn and LockBtn then break end
-        tries += 1
-        task.wait(0.2)
-    end
-
-    if not ToggleBtn and not LockBtn then return end
-
-    local function SetIcon(iconLabel, lucideName)
-        local ok, iconData = pcall(function() return Library:GetCustomIcon(lucideName) end)
-        if not ok or not iconData or not iconData.Url then return end
-        if not iconLabel or not iconLabel.Parent then return end
-        pcall(function()
-            if iconLabel.Image ~= iconData.Url then
-                iconLabel.Image = iconData.Url
-            end
-        end)
-    end
-
-    local lastToggled, lastLocked
-
-    Library:GiveSignal(RunService.Heartbeat:Connect(function()
-        local ok = pcall(function()
-            if not ToggleBtn or not ToggleBtn.Parent then
-                ToggleBtn, ToggleIcon = FindIconButton({ "eye" })
-            end
-            if not LockBtn or not LockBtn.Parent then
-                LockBtn, LockIcon = FindIconButton({ "lock-keyhole", "lock" })
-            end
-
-            local isVisible = Library.Toggled
-            if isVisible ~= lastToggled then
-                lastToggled = isVisible
-                SetIcon(ToggleIcon,
-                    isVisible and Library.ButtonIconState.ToggleOn or Library.ButtonIconState.ToggleOff)
-            end
-
-            local isLocked = Library.CantDragForced
-            if isLocked ~= lastLocked then
-                lastLocked = isLocked
-                SetIcon(LockIcon,
-                    isLocked and Library.ButtonIconState.LockClosed or Library.ButtonIconState.LockOpen)
-            end
-        end)
-    end))
+    N("Diag 結果",
+        "Btn=" .. guiButtons ..
+        " / eye=" .. tostring(eyeFound) ..
+        " / lock=" .. tostring(lockFound))
 end)
 return Library
