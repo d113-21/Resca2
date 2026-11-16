@@ -16750,13 +16750,15 @@ task.spawn(function()
     end
 end)
 --// === End Addon v2 ===
---// === Search Bar Buttons (Bell + X) + Notification History (Addon v3) ===
-Library.NotifHistory = Library.NotifHistory or { Entries = {}, MaxEntries = 500, Panel = nil, PanelOpen = false }
+--// === Search Bar Buttons (Bell + X) + Notification History (Addon v4) ===
+Library.NotifHistory = Library.NotifHistory or {
+    Entries = {}, MaxEntries = 500, Panel = nil, PanelOpen = false, Dialog = nil,
+}
 Library.SearchBarButtonSize = Library.SearchBarButtonSize or 16
 Library.SearchBarButtonGap  = Library.SearchBarButtonGap  or 3
 
 local History = Library.NotifHistory
-local BellBtn, CloseBtn, BellBadge, HistoryPanel
+local BellBtn, CloseBtn
 
 local function FindSearchBar()
     if not Library.ScreenGui then return nil end
@@ -16768,15 +16770,7 @@ local function FindSearchBar()
     return nil
 end
 
-local function UpdateBadge()
-    if not BellBadge or not BellBadge.Parent then return end
-    local n = #History.Entries
-    BellBadge.Visible = (n > 0)
-    BellBadge.Text = (n > 99) and "99+" or tostring(n)
-end
-function Library:RefreshBellBadge() UpdateBadge() end
-
--- Notify フック
+-- Notify フック（堅牢版：文字列/テーブル/複数引数すべて対応）
 task.spawn(function()
     while not Library.Unloaded do
         if typeof(Library.Notify) == "function" and not Library._NotifHook then
@@ -16784,11 +16778,28 @@ task.spawn(function()
             local Orig = Library.Notify
             Library.Notify = function(...)
                 local a = table.pack(...)
-                local text = (a[1] == Library) and tostring(a[2] or "") or tostring(a[1] or "")
+                local startIdx = (a[1] == Library) and 2 or 1
+                local parts = {}
+                for i = startIdx, a.n do
+                    local v = a[i]
+                    local vt = typeof(v)
+                    if vt == "string" then
+                        if v ~= "" then table.insert(parts, v) end
+                    elseif vt == "table" then
+                        local tv = v.Text or v.Title or v.Content or v.Message or v.Body
+                        if tv and tostring(tv) ~= "" then table.insert(parts, tostring(tv)) end
+                    end
+                end
+                local text = table.concat(parts, " | ")
+                if text == "" then text = "(notification)" end
                 local t = os.date("*t")
-                table.insert(History.Entries, 1, { Time = string.format("%02d:%02d:%02d", t.hour, t.min, t.sec), Text = text })
-                while #History.Entries > History.MaxEntries do table.remove(History.Entries) end
-                UpdateBadge()
+                table.insert(History.Entries, 1, {
+                    Time = string.format("%02d:%02d:%02d", t.hour, t.min, t.sec),
+                    Text = text,
+                })
+                while #History.Entries > History.MaxEntries do
+                    table.remove(History.Entries)
+                end
                 if History.PanelOpen then Library:RefreshHistoryPanel() end
                 return Orig(...)
             end
@@ -16798,15 +16809,12 @@ task.spawn(function()
     end
 end)
 
--- ベル・×ボタン生成（lucide bell / x、色は FontColor）
+-- ベル・×ボタン生成（バッジなし）
 local function CreateSearchBarButtons()
     if Library._SearchActionsContainer and Library._SearchActionsContainer.Parent then return true end
     local Bar = FindSearchBar()
     if not Bar or not Bar.Parent then return false end
-
-    if not Library:GetIcon("bell") or not Library:GetIcon("x") then
-        return false
-    end
+    if not Library:GetIcon("bell") or not Library:GetIcon("x") then return false end
 
     local BtnSize = Library.SearchBarButtonSize
     local Gap = Library.SearchBarButtonGap
@@ -16848,26 +16856,8 @@ local function CreateSearchBarButtons()
     xBtn.ZIndex = Container.ZIndex
     CloseBtn = xBtn
 
-    local badge = Instance.new("TextLabel")
-    badge.Name = "_Badge"
-    badge.BackgroundTransparency = 1
-    badge.AnchorPoint = Vector2.new(1, 1)
-    badge.Position = UDim2.new(1, 3, 1, 2)
-    badge.Size = UDim2.fromOffset(22, 12)
-    badge.TextSize = 10
-    badge.TextColor3 = Color3.fromRGB(255, 70, 70)
-    badge.FontFace = Library.Scheme.Font or Font.fromEnum(Enum.Font.Code)
-    badge.TextXAlignment = Enum.TextXAlignment.Right
-    badge.Text = ""
-    badge.Visible = false
-    badge.ZIndex = bell.ZIndex + 2
-    badge.Parent = bell
-    BellBadge = badge
-
     bell.MouseButton1Click:Connect(function() Library:ToggleHistoryPanel() end)
     xBtn.MouseButton1Click:Connect(function() Library:ShowCloseConfirm() end)
-
-    UpdateBadge()
     return true
 end
 
@@ -16878,7 +16868,7 @@ task.spawn(function()
     end
 end)
 
--- ウィンドウリサイズ時も追従
+-- サーチバーアクションの位置をリサイズ時も追従
 Library:GiveSignal(RunService.Heartbeat:Connect(function()
     local C = Library._SearchActionsContainer
     if not C or not C.Parent then return end
@@ -16891,15 +16881,13 @@ end))
 
 -- 履歴パネル
 local function CreateHistoryPanel()
-    if HistoryPanel and HistoryPanel.Parent then return HistoryPanel end
-
+    if History.Panel and History.Panel.Parent then return History.Panel end
     local panel = Instance.new("ScrollingFrame")
     panel.Name = "_HistoryPanel"
     panel.BackgroundColor3 = Library.Scheme.MainColor or Color3.fromRGB(25, 25, 25)
     panel.BorderSizePixel = 0
     panel.Size = UDim2.fromOffset(340, 380)
-    panel.AnchorPoint = Vector2.new(1, 0)
-    panel.Position = UDim2.new(1, -12, 0, 50)
+    panel.AnchorPoint = Vector2.new(0, 0)
     panel.CanvasSize = UDim2.new(0, 0, 0, 0)
     panel.ScrollBarThickness = 4
     panel.ScrollBarImageColor3 = Library.Scheme.AccentColor or Color3.fromRGB(125, 85, 255)
@@ -16907,20 +16895,16 @@ local function CreateHistoryPanel()
     panel.ZIndex = 500
     panel.Visible = false
     panel.Parent = Library.ScreenGui
-
     Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 6)
     local stroke = Instance.new("UIStroke", panel)
     stroke.Color = Library.Scheme.OutlineColor or Color3.fromRGB(60, 60, 60)
     stroke.Thickness = 1
-
     local pad = Instance.new("UIPadding", panel)
     pad.PaddingTop = UDim.new(0, 8); pad.PaddingBottom = UDim.new(0, 8)
     pad.PaddingLeft = UDim.new(0, 10); pad.PaddingRight = UDim.new(0, 10)
-
     local layout = Instance.new("UIListLayout", panel)
     layout.Padding = UDim.new(0, 5)
     layout.SortOrder = Enum.SortOrder.LayoutOrder
-
     local header = Instance.new("TextLabel")
     header.Name = "Header"
     header.BackgroundTransparency = 1
@@ -16933,7 +16917,6 @@ local function CreateHistoryPanel()
     header.LayoutOrder = -1
     header.ZIndex = 501
     header.Parent = panel
-
     local content = Instance.new("Frame")
     content.Name = "Content"
     content.BackgroundTransparency = 1
@@ -16941,24 +16924,23 @@ local function CreateHistoryPanel()
     content.AutomaticSize = Enum.AutomaticSize.Y
     content.ZIndex = 500
     content.Parent = panel
-
     local cl = Instance.new("UIListLayout", content)
     cl.Padding = UDim.new(0, 4)
     cl.SortOrder = Enum.SortOrder.LayoutOrder
-
-    HistoryPanel = panel
+    History.Panel = panel
     return panel
 end
 
 function Library:RefreshHistoryPanel()
-    if not HistoryPanel or not HistoryPanel.Parent then return end
-    local content = HistoryPanel:FindFirstChild("Content")
+    local panel = History.Panel
+    if not panel or not panel.Parent then return end
+    local content = panel:FindFirstChild("Content")
     if not content then return end
     local cl = content:FindFirstChildOfClass("UIListLayout")
-    for _, c in content:GetChildren() do if c:IsA("TextLabel") then c:Destroy() end end
-
+    for _, c in content:GetChildren() do
+        if c:IsA("TextLabel") then c:Destroy() end
+    end
     local FFace = Library.Scheme.Font or Font.fromEnum(Enum.Font.Code)
-
     if #History.Entries == 0 then
         local e = Instance.new("TextLabel")
         e.BackgroundTransparency = 1
@@ -16986,22 +16968,54 @@ function Library:RefreshHistoryPanel()
             lb.Parent = content
         end
     end
-
     task.defer(function()
-        if not HistoryPanel or not HistoryPanel.Parent or not cl then return end
-        HistoryPanel.CanvasSize = UDim2.new(0, 0, 0, cl.AbsoluteContentSize.Y + 50)
+        if not panel or not panel.Parent or not cl then return end
+        panel.CanvasSize = UDim2.new(0, 0, 0, cl.AbsoluteContentSize.Y + 50)
     end)
+end
+
+-- パネル位置をウィンドウに追従
+local function PositionPanel()
+    local panel = History.Panel
+    if not panel or not panel.Visible then return end
+    local W = Library.Window
+    local mf = W and W.MainFrame
+    if not mf or not mf.Visible then return end
+    local wp, ws = mf.AbsolutePosition, mf.AbsoluteSize
+    local cam = workspace.CurrentCamera
+    local vw = cam and cam.ViewportSize.X or 1920
+    local vh = cam and cam.ViewportSize.Y or 1080
+    local pw, ph = panel.AbsoluteSize.X, panel.AbsoluteSize.Y
+    if pw <= 0 then pw = 340 end
+    if ph <= 0 then ph = 380 end
+    local rightX = wp.X + ws.X + 8
+    local leftX = wp.X - pw - 8
+    local x, y
+    if rightX + pw <= vw - 8 then
+        x, y = rightX, wp.Y + 40
+    elseif leftX >= 8 then
+        x, y = leftX, wp.Y + 40
+    else
+        x, y = wp.X + ws.X - pw - 12, wp.Y + 40
+    end
+    if y + ph > vh - 8 then y = math.max(8, vh - ph - 8) end
+    if y < 8 then y = 8 end
+    if x < 8 then x = 8 end
+    if x + pw > vw - 8 then x = vw - pw - 8 end
+    panel.AnchorPoint = Vector2.new(0, 0)
+    panel.Position = UDim2.fromOffset(x, y)
 end
 
 function Library:OpenHistoryPanel()
     CreateHistoryPanel()
     Library:RefreshHistoryPanel()
-    HistoryPanel.Visible = true
+    History.Panel.Visible = true
     History.PanelOpen = true
+    PositionPanel()
 end
 
 function Library:CloseHistoryPanel()
-    if HistoryPanel then HistoryPanel.Visible = false end
+    if History.Panel then History.Panel.Visible = false end
     History.PanelOpen = false
 end
 
@@ -17009,29 +17023,23 @@ function Library:ToggleHistoryPanel()
     if History.PanelOpen then Library:CloseHistoryPanel() else Library:OpenHistoryPanel() end
 end
 
--- 確認ダイアログ（背景なし・Libraryフォント）
-local ConfirmDialog
+-- 確認ダイアログ
 local function CreateConfirmDialog()
-    if ConfirmDialog and ConfirmDialog.Parent then return ConfirmDialog end
-
+    if History.Dialog and History.Dialog.Parent then return History.Dialog end
     local dialog = Instance.new("Frame")
     dialog.Name = "_CloseConfirm"
     dialog.BackgroundColor3 = Library.Scheme.MainColor or Color3.fromRGB(25, 25, 25)
     dialog.BorderSizePixel = 0
     dialog.Size = UDim2.fromOffset(300, 140)
-    dialog.Position = UDim2.fromScale(0.5, 0.5)
     dialog.AnchorPoint = Vector2.new(0.5, 0.5)
     dialog.ZIndex = 1001
     dialog.Visible = false
     dialog.Parent = Library.ScreenGui
-
     Instance.new("UICorner", dialog).CornerRadius = UDim.new(0, 6)
     local st = Instance.new("UIStroke", dialog)
-    st.Color = Library.Scheme.OutlineColor or Color3.fromRGB(60,60,60)
+    st.Color = Library.Scheme.OutlineColor or Color3.fromRGB(60, 60, 60)
     st.Thickness = 1
-
     local FFace = Library.Scheme.Font or Font.fromEnum(Enum.Font.Code)
-
     local msg = Instance.new("TextLabel")
     msg.BackgroundTransparency = 1
     msg.Size = UDim2.new(1, -24, 0, 60)
@@ -17044,7 +17052,6 @@ local function CreateConfirmDialog()
     msg.TextXAlignment = Enum.TextXAlignment.Center
     msg.ZIndex = 1002
     msg.Parent = dialog
-
     local function mk(name, text, color, xo)
         local b = Instance.new("TextButton")
         b.Name = name; b.BackgroundColor3 = color; b.BorderSizePixel = 0
@@ -17052,27 +17059,49 @@ local function CreateConfirmDialog()
         b.Position = UDim2.new(0.5, xo, 1, -14)
         b.AnchorPoint = Vector2.new(0.5, 1)
         b.Text = text; b.TextSize = 14
-        b.TextColor3 = Color3.new(1,1,1)
+        b.TextColor3 = Color3.new(1, 1, 1)
         b.FontFace = FFace
         b.ZIndex = 1002; b.Parent = dialog
         Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
         return b
     end
-
-    local yes = mk("Yes", "Yes", Library.Scheme.AccentColor or Color3.fromRGB(125,85,255), -60)
-    local no = mk("No", "No", Library.Scheme.DestructiveColor or Color3.fromRGB(220,38,38), 60)
-
+    local yes = mk("Yes", "Yes", Library.Scheme.AccentColor or Color3.fromRGB(125, 85, 255), -60)
+    local no = mk("No", "No", Library.Scheme.DestructiveColor or Color3.fromRGB(220, 38, 38), 60)
     yes.MouseButton1Click:Connect(function()
         dialog.Visible = false
         Library:CloseScript()
     end)
     no.MouseButton1Click:Connect(function() dialog.Visible = false end)
-
-    ConfirmDialog = dialog
+    History.Dialog = dialog
     return dialog
 end
 
-function Library:ShowCloseConfirm() CreateConfirmDialog().Visible = true end
+local function PositionDialog()
+    local dialog = History.Dialog
+    if not dialog or not dialog.Visible then return end
+    local W = Library.Window
+    local mf = W and W.MainFrame
+    if not mf or not mf.Visible then
+        dialog.AnchorPoint = Vector2.new(0.5, 0.5)
+        dialog.Position = UDim2.fromScale(0.5, 0.5)
+        return
+    end
+    local wp, ws = mf.AbsolutePosition, mf.AbsoluteSize
+    dialog.AnchorPoint = Vector2.new(0.5, 0.5)
+    dialog.Position = UDim2.fromOffset(wp.X + ws.X / 2, wp.Y + ws.Y / 2)
+end
+
+function Library:ShowCloseConfirm()
+    CreateConfirmDialog()
+    History.Dialog.Visible = true
+    PositionDialog()
+end
+
+-- 追従ループ（パネル＋ダイアログ両方）
+Library:GiveSignal(RunService.Heartbeat:Connect(function()
+    if History.PanelOpen then PositionPanel() end
+    if History.Dialog and History.Dialog.Visible then PositionDialog() end
+end))
 
 -- × でスクリプト自体を閉じる
 function Library:CloseScript()
@@ -17085,7 +17114,7 @@ function Library:CloseScript()
         pcall(function() Library.ScreenGui:Destroy() end)
     end
 end
---// === End Addon v3 ===
+--// === End Addon v4 ===
 --// === Footer Marquee (Addon v3 Auto) ===
 Library.FooterMarquee = Library.FooterMarquee or {
     Enabled = true,
