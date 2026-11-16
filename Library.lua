@@ -17136,7 +17136,7 @@ local function EnsureIndicator(Tab)
     ind.BackgroundColor3 = GetAccent()
     ind.BorderSizePixel = 0
     ind.AnchorPoint = Vector2.new(0, 0.5)
-    ind.Position = UDim2.new(0, 0, 0.5, 0)
+    ind.Position = UDim2.new(0, 4, 0.5, 0)   -- 右に 4px
     ind.Size = UDim2.new(0, 2, 1, -8)
     ind.ZIndex = (btn.ZIndex or 1) + 5
     ind.Visible = false
@@ -17278,15 +17278,17 @@ end)
 function Library:RefreshFooterMarquee() StopFM(); local l = FindFooterLabel(); if l then SetupFM(l) end end
 function Library:StopFooterMarquee() StopFM() end
 
--- ═══ ⑧ Window 白外枠グラデーション（v12） ═══
+-- ═══ ⑧ Window 白外枠グラデーション（v13：内側短く・即フェード） ═══
 Library.WindowGlow = Library.WindowGlow or {
     Enabled = true,
     Color = Color3.new(1, 1, 1),
-    Layers = 8,                -- 段階数（多いほど滑らか）
-    InnerThickness = 1.5,      -- 一番内側の太さ
-    OuterThickness = 12,       -- 一番外側の太さ
-    InnerTransparency = 0.1,   -- 一番内側の濃さ（0=くっきり白）
-    OuterTransparency = 0.95,  -- 一番外側の薄さ（1=完全透明）
+    Layers = 10,
+    InnerThickness = 0.6,
+    OuterThickness = 5.0,
+    InnerTransparency = 0.15,
+    OuterTransparency = 0.95,
+    ThicknessCurve = 1.4,   -- 大きいほど内側が細いまま外で太くなる
+    FadeCurve = 0.55,       -- 小さいほど早く薄くなる（0.5〜0.7推奨）
 }
 
 local GlowStrokes = {}
@@ -17306,16 +17308,19 @@ local function AttachGlow()
 
     local n = math.max(2, cfg.Layers)
     for i = 1, n do
-        local t = (i - 1) / (n - 1) -- 0(内) → 1(外)
-        local thickness = cfg.InnerThickness + (cfg.OuterThickness - cfg.InnerThickness) * t
-        local trans = cfg.InnerTransparency + (cfg.OuterTransparency - cfg.InnerTransparency) * t
+        local t = (i - 1) / (n - 1)  -- 0(内)→1(外)
+        local tThick = t ^ cfg.ThicknessCurve
+        local tFade = t ^ cfg.FadeCurve
+
+        local thickness = cfg.InnerThickness + (cfg.OuterThickness - cfg.InnerThickness) * tThick
+        local trans = cfg.InnerTransparency + (cfg.OuterTransparency - cfg.InnerTransparency) * tFade
 
         local stroke = Instance.new("UIStroke")
         stroke.Name = "_WindowGlow_" .. i
         stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
         stroke.Color = cfg.Color
         stroke.Thickness = thickness
-        stroke.Transparency = trans
+        stroke.Transparency = math.clamp(trans, 0.05, 0.98)
         stroke.ZIndex = (mf.ZIndex or 1) + 1
         stroke.Parent = mf
         table.insert(GlowStrokes, stroke)
