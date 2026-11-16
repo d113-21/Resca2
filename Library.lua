@@ -16691,4 +16691,74 @@ function Library:StopAllTabIconSpins()
     end
 end
 --// === End Addon v5 ===
+--// === Shrink Search Bar from Right (Addon) ===
+Library.SearchShrink = Library.SearchShrink or {
+    RightInset = 14,      -- 右から縮めるピクセル数（大きくするほど狭くなる）
+}
+
+local function FindSearchTextBox()
+    local Gui = Library.ScreenGui
+    if not Gui then return nil end
+    for _, D in Gui:GetDescendants() do
+        if D:IsA("TextBox") then
+            local ph = string.lower(D.PlaceholderText or "")
+            if ph:find("search") then
+                return D
+            end
+        end
+    end
+    return nil
+end
+
+local function Apply()
+    local Box = FindSearchTextBox()
+    if not Box then return false end
+
+    local Bar = Box.Parent
+    if not Bar or not Bar:IsA("GuiObject") then return false end
+
+    if Bar:GetAttribute("_SearchShrunk") then return true end
+
+    local s = Bar.Size
+    local inset = Library.SearchShrink.RightInset
+
+    if s.X.Scale > 0 then
+        -- スケール幅（親に対する割合）で作られている場合
+        local parentW = Bar.Parent and Bar.Parent.AbsoluteSize.X or 0
+        if parentW > 0 then
+            local delta = inset / parentW
+            Bar.Size = UDim2.new(math.max(0.1, s.X.Scale - delta), s.X.Offset, s.Y.Scale, s.Y.Offset)
+        else
+            Bar.Size = UDim2.new(s.X.Scale, s.X.Offset - inset, s.Y.Scale, s.Y.Offset)
+        end
+    else
+        -- オフセット幅の場合
+        Bar.Size = UDim2.new(s.X.Scale, s.X.Offset - inset, s.Y.Scale, s.Y.Offset)
+    end
+
+    -- 右アンカーされているならPositionも右からずらす（自動判定）
+    if Bar.AnchorPoint.X >= 0.5 then
+        local p = Bar.Position
+        Bar.Position = UDim2.new(p.X.Scale, p.X.Offset + inset, p.Y.Scale, p.Y.Offset)
+    end
+
+    Bar:SetAttribute("_SearchShrunk", true)
+    return true
+end
+
+task.spawn(function()
+    while not Library.Unloaded do
+        if Apply() then break end
+        task.wait(0.2)
+    end
+end)
+
+function Library:RefreshSearchShrink()
+    local Box = FindSearchTextBox()
+    if Box and Box.Parent then
+        Box.Parent:SetAttribute("_SearchShrunk", nil)
+    end
+    Apply()
+end
+--// === End Addon ===
 return Library
