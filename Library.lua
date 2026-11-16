@@ -17338,52 +17338,38 @@ end)
 
 function Library:RefreshWindowGlow() AttachGlow() end
 function Library:StopWindowGlow() RemoveGlow() end
--- ═══ Toggle / Lock ボタンをアイコン化 (v21) ═══
+-- ═══ Toggle / Lock ボタンをアイコン化 (v22) ═══
 task.spawn(function()
-    -- LibraryとWindowの生成を待つ
-    local waited = 0
-    while not Library.Unloaded and waited < 100 do
+    -- ウィンドウやボタンの生成を待つ
+    local waitT = 0
+    while not Library.Unloaded and waitT < 200 do
         if Library.Floats and Library.Window and Library.Window.MainFrame then break end
-        task.wait(0.1); waited += 1
+        task.wait(0.1); waitT = waitT + 1
     end
-    task.wait(1) -- 少し待って確実に生成させる
+    task.wait(1)
 
     local ToggleBtn, LockBtn
-
-    -- テキストからボタンを探す関数
-    local function FindButtonByText(targetText)
-        local ok, result = pcall(function()
-            for _, child in ipairs(Library.Floats:GetChildren()) do
-                if child:IsA("GuiButton") then
-                    -- ボタン自体にテキストがある場合
-                    if child.Text == targetText then return child end
-                    -- ボタンの子にTextLabelがある場合
-                    for _, d in ipairs(child:GetDescendants()) do
-                        if d:IsA("TextLabel") and d.Text == targetText then
-                            return child
-                        end
-                    end
-                end
-            end
-        end)
-        return ok and result or nil
-    end
 
     -- ボタンをアイコン化する関数
     local function MakeIconButton(btn, iconName)
         if not btn or not btn.Parent then return end
+        if not btn:IsA("TextButton") then
+            btn = btn:FindFirstAncestorOfClass("TextButton") or btn
+        end
         
-        -- 元のテキストを消す
-        if btn:IsA("TextButton") or btn:IsA("TextLabel") then
-            btn.Text = ""
-        end
-        for _, d in ipairs(btn:GetDescendants()) do
-            if d:IsA("TextLabel") or d:IsA("TextButton") then
-                d.Text = ""
+        -- 文字を消去
+        pcall(function()
+            if btn:IsA("TextButton") or btn:IsA("TextLabel") then
+                btn.Text = ""
             end
-        end
+            for _, d in ipairs(btn:GetDescendants()) do
+                if d:IsA("TextLabel") or d:IsA("TextButton") then
+                    d.Text = ""
+                end
+            end
+        end)
 
-        -- アイコン画像を作成・更新
+        -- アイコン用のImageLabelを探す、なければ作る
         local iconImg = btn:FindFirstChild("_MyLucideIcon")
         if not iconImg then
             iconImg = Instance.new("ImageLabel")
@@ -17391,35 +17377,50 @@ task.spawn(function()
             iconImg.BackgroundTransparency = 1
             iconImg.AnchorPoint = Vector2.new(0.5, 0.5)
             iconImg.Position = UDim2.fromScale(0.5, 0.5)
-            iconImg.Size = UDim2.fromOffset(20, 20) -- アイコンサイズ
+            iconImg.Size = UDim2.fromOffset(22, 22) -- アイコンのサイズ
             iconImg.ScaleType = Enum.ScaleType.Fit
-            iconImg.ZIndex = btn.ZIndex + 1
+            iconImg.ZIndex = (btn.ZIndex or 1) + 1
             iconImg.Parent = btn
         end
 
-        -- lucideアイコンを取得して設定
+        -- アイコンのURLを取得（GetCustomIcon優先、なければGetIcon）
         local iconData = Library:GetCustomIcon(iconName)
+        if not iconData or not iconData.Url then
+            iconData = Library:GetIcon(iconName)
+        end
+
         if iconData and iconData.Url then
             iconImg.Image = iconData.Url
             iconImg.ImageColor3 = Library.Scheme.FontColor or Color3.new(1, 1, 1)
         end
     end
 
-    -- ボタンの検出
-    ToggleBtn = FindButtonByText("Toggle")
-    LockBtn = FindButtonByText("Lock")
-
-    -- 状態監視とアイコン切り替えループ
+    -- 状態の監視と適用ループ
     local lastToggled, lastLocked
+
     Library:GiveSignal(RunService.Heartbeat:Connect(function()
+        -- ボタンが見つかっていない、または消えた場合は探し直す
         if not ToggleBtn or not ToggleBtn.Parent then
-            ToggleBtn = FindButtonByText("Toggle")
-        end
-        if not LockBtn or not LockBtn.Parent then
-            LockBtn = FindButtonByText("Lock")
+            ToggleBtn = nil
+            for _, desc in ipairs(Library.Floats:GetDescendants()) do
+                if desc:IsA("TextButton") and desc.Text:lower():find("toggle") then
+                    ToggleBtn = desc
+                    break
+                end
+            end
         end
 
-        -- Toggle の状態 (Windowが表示されているか)
+        if not LockBtn or not LockBtn.Parent then
+            LockBtn = nil
+            for _, desc in ipairs(Library.Floats:GetDescendants()) do
+                if desc:IsA("TextButton") and desc.Text:lower():find("lock") then
+                    LockBtn = desc
+                    break
+                end
+            end
+        end
+
+        -- Toggle の適用 (Window表示状態)
         if ToggleBtn then
             local isVisible = Library.Toggled
             if isVisible ~= lastToggled then
@@ -17428,7 +17429,7 @@ task.spawn(function()
             end
         end
 
-        -- Lock の状態 (ドラッグ固定されているか)
+        -- Lock の適用 (ロック状態)
         if LockBtn then
             local isLocked = Library.CantDragForced
             if isLocked ~= lastLocked then
