@@ -17338,7 +17338,7 @@ end)
 
 function Library:RefreshWindowGlow() AttachGlow() end
 function Library:StopWindowGlow() RemoveGlow() end
--- ═══ Toggle / Lock をアイコンボタンに置き換え (v23) ═══
+-- ═══ Toggle / Lock 四角いカスタムボタン化 (v24) ═══
 task.spawn(function()
     -- 生成を待つ
     local waitT = 0
@@ -17348,96 +17348,108 @@ task.spawn(function()
     end
     task.wait(1)
 
-    local ToggleBtn, LockBtn
+    -- ① 元の壊れた「Toggle」「Lock」ボタンを探して完全に削除
+    for _, desc in ipairs(Library.Floats:GetDescendants()) do
+        if desc:IsA("TextButton") and (desc.Text:lower():find("toggle") or desc.Text:lower():find("lock")) then
+            desc:Destroy()
+        end
+    end
 
-    -- 元のボタンを透明にしてアイコンを配置する関数
-    local function StylizeButton(btn)
-        if not btn or not btn.Parent then return end
-        
-        -- 元の見た目（黒背景、枠線、テキスト）を消す
-        btn.BackgroundTransparency = 1
+    -- ② 新しく四角いボタンを配置するコンテナを作成
+    local container = Instance.new("Frame")
+    container.Name = "_CustomActionButtons"
+    container.BackgroundTransparency = 1
+    container.Position = UDim2.fromOffset(10, 10)
+    container.Size = UDim2.fromOffset(70, 30)
+    container.Parent = Library.Floats
+
+    local layout = Instance.new("UIListLayout", container)
+    layout.FillDirection = Enum.FillDirection.Horizontal
+    layout.Padding = UDim.new(0, 10)
+    layout.VerticalAlignment = Enum.VerticalAlignment.Center
+
+    -- コンテナをドラッグ可能にする
+    Library:MakeDraggable(container, container, true)
+
+    -- 四角いボタンを作成する関数
+    local function CreateSquareButton()
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.fromOffset(30, 30)
+        btn.BackgroundColor3 = Library.Scheme.BackgroundColor
+        btn.BorderSizePixel = 0
         btn.Text = ""
         btn.AutoButtonColor = false
         
-        -- 元の丸みや枠線を削除
-        for _, child in ipairs(btn:GetChildren()) do
-            if child:IsA("UIStroke") or child:IsA("UICorner") then
-                child:Destroy()
+        local corner = Instance.new("UICorner", btn)
+        corner.CornerRadius = UDim.new(0, 6)
+        
+        local stroke = Instance.new("UIStroke", btn)
+        stroke.Color = Library.Scheme.OutlineColor
+        stroke.Thickness = 1
+        
+        local img = Instance.new("ImageLabel", btn)
+        img.Name = "Icon"
+        img.BackgroundTransparency = 1
+        img.Size = UDim2.fromScale(0.6, 0.6)
+        img.Position = UDim2.fromScale(0.5, 0.5)
+        img.AnchorPoint = Vector2.new(0.5, 0.5)
+        img.ScaleType = Enum.ScaleType.Fit
+        img.ImageColor3 = Library.Scheme.FontColor
+        
+        return btn, img
+    end
+
+    -- ボタンの生成
+    local toggleBtn, toggleIcon = CreateSquareButton()
+    toggleBtn.Parent = container
+    
+    local lockBtn, lockIcon = CreateSquareButton()
+    lockBtn.Parent = container
+
+    -- アイコン取得用ヘルパー
+    local function SetIcon(imgLabel, iconName)
+        local data = Library:GetIcon(iconName) or Library:GetCustomIcon(iconName)
+        if data and data.Url then
+            imgLabel.Image = data.Url
+        end
+    end
+
+    -- 初期アイコン設定
+    SetIcon(toggleIcon, "eye")
+    SetIcon(lockIcon, "lock-keyhole-open")
+
+    -- クリックイベントの設定
+    toggleBtn.MouseButton1Click:Connect(function()
+        if typeof(Library.Toggle) == "function" then
+            Library:Toggle()
+        elseif typeof(Library.ToggleWindow) == "function" then
+            Library:ToggleWindow()
+        else
+            -- 代替処理
+            Library.Toggled = not Library.Toggled
+            if Library.Window and Library.Window.MainFrame then
+                Library.Window.MainFrame.Visible = Library.Toggled
             end
         end
-        
-        -- ボタンのサイズを正方形に（今は楕円形のため）
-        btn.Size = UDim2.fromOffset(28, 28)
-        
-        -- アイコン表示用のImageLabelを作成
-        local iconImg = btn:FindFirstChild("_LucideIcon")
-        if not iconImg then
-            iconImg = Instance.new("ImageLabel")
-            iconImg.Name = "_LucideIcon"
-            iconImg.BackgroundTransparency = 1
-            iconImg.AnchorPoint = Vector2.new(0.5, 0.5)
-            iconImg.Position = UDim2.fromScale(0.5, 0.5)
-            iconImg.Size = UDim2.fromScale(0.9, 0.9)
-            iconImg.ScaleType = Enum.ScaleType.Fit
-            iconImg.ZIndex = (btn.ZIndex or 1) + 1
-            iconImg.Parent = btn
-        end
-    end
+    end)
 
-    -- アイコンをセットする関数
-    local function SetIcon(btn, iconName)
-        if not btn or not btn.Parent then return end
-        local iconImg = btn:FindFirstChild("_LucideIcon")
-        if not iconImg then return end
-        
-        local iconData = Library:GetIcon(iconName) or Library:GetCustomIcon(iconName)
-        if iconData and iconData.Url then
-            iconImg.Image = iconData.Url
-            iconImg.ImageColor3 = Library.Scheme.FontColor or Color3.new(1, 1, 1)
-        end
-    end
+    lockBtn.MouseButton1Click:Connect(function()
+        Library.CantDragForced = not Library.CantDragForced
+    end)
 
+    -- 状態監視とアイコン切り替えループ
     local lastToggled, lastLocked
-
-    -- 毎フレーム監視して適用
     Library:GiveSignal(RunService.Heartbeat:Connect(function()
-        -- ボタンの検出
-        if not ToggleBtn or not ToggleBtn.Parent then
-            for _, desc in ipairs(Library.Floats:GetDescendants()) do
-                if desc:IsA("TextButton") and desc.Text:lower():find("toggle") then
-                    ToggleBtn = desc
-                    StylizeButton(ToggleBtn)
-                    break
-                end
-            end
+        local isVisible = Library.Toggled
+        if isVisible ~= lastToggled then
+            lastToggled = isVisible
+            SetIcon(toggleIcon, isVisible and "eye-off" or "eye")
         end
 
-        if not LockBtn or not LockBtn.Parent then
-            for _, desc in ipairs(Library.Floats:GetDescendants()) do
-                if desc:IsA("TextButton") and desc.Text:lower():find("lock") then
-                    LockBtn = desc
-                    StylizeButton(LockBtn)
-                    break
-                end
-            end
-        end
-
-        -- Toggleの状態（Windowが表示されているか）
-        if ToggleBtn then
-            local isVisible = Library.Toggled
-            if isVisible ~= lastToggled then
-                lastToggled = isVisible
-                SetIcon(ToggleBtn, isVisible and "eye-off" or "eye")
-            end
-        end
-
-        -- Lockの状態（固定されているか）
-        if LockBtn then
-            local isLocked = Library.CantDragForced
-            if isLocked ~= lastLocked then
-                lastLocked = isLocked
-                SetIcon(LockBtn, isLocked and "lock-keyhole" or "lock-keyhole-open")
-            end
+        local isLocked = Library.CantDragForced
+        if isLocked ~= lastLocked then
+            lastLocked = isLocked
+            SetIcon(lockIcon, isLocked and "lock-keyhole" or "lock-keyhole-open")
         end
     end))
 end)
