@@ -17277,5 +17277,65 @@ end)
 
 function Library:RefreshFooterMarquee() StopFM(); local l = FindFooterLabel(); if l then SetupFM(l) end end
 function Library:StopFooterMarquee() StopFM() end
+-- ═══ Window 白外枠グラデーション ═══
+Library.WindowGlow = Library.WindowGlow or {
+    Enabled = true,
+    Color = Color3.new(1, 1, 1),
+    Layers = 10,
+    InnerThickness = 0.6,
+    OuterThickness = 5.0,
+    InnerTransparency = 0.15,
+    OuterTransparency = 0.95,
+    ThicknessCurve = 1.4,
+    FadeCurve = 0.55,
+}
 
+local GlowStrokes = {}
+
+local function RemoveGlow()
+    for _, s in ipairs(GlowStrokes) do pcall(function() s:Destroy() end) end
+    GlowStrokes = {}
+end
+
+local function AttachGlow()
+    RemoveGlow()
+    local cfg = Library.WindowGlow
+    if not cfg.Enabled then return end
+    local W = Library.Window
+    local mf = W and W.MainFrame
+    if not mf then return end
+
+    local n = math.max(2, cfg.Layers)
+    for i = 1, n do
+        local t = (i - 1) / (n - 1)
+        local tThick = t ^ cfg.ThicknessCurve
+        local tFade = t ^ cfg.FadeCurve
+
+        local thickness = cfg.InnerThickness + (cfg.OuterThickness - cfg.InnerThickness) * tThick
+        local trans = cfg.InnerTransparency + (cfg.OuterTransparency - cfg.InnerTransparency) * tFade
+
+        local stroke = Instance.new("UIStroke")
+        stroke.Name = "_WindowGlow_" .. i
+        stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+        stroke.Color = cfg.Color
+        stroke.Thickness = thickness
+        stroke.Transparency = math.clamp(trans, 0.05, 0.98)
+        stroke.ZIndex = (mf.ZIndex or 1) + 1
+        stroke.Parent = mf
+        table.insert(GlowStrokes, stroke)
+    end
+end
+
+task.spawn(function()
+    while not Library.Unloaded do
+        if Library.Window and Library.Window.MainFrame then
+            AttachGlow()
+            break
+        end
+        task.wait(0.3)
+    end
+end)
+
+function Library:RefreshWindowGlow() AttachGlow() end
+function Library:StopWindowGlow() RemoveGlow() end
 return Library
