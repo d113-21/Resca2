@@ -17279,4 +17279,69 @@ function Library:RefreshFooterMarquee() StopFM(); local l = FindFooterLabel(); i
 function Library:StopFooterMarquee() StopFM() end
 
 --// === End Addons Pack v8 ===
+-- ═══ ⑧ Window 白オーラ外枠 ═══
+Library.WindowGlow = Library.WindowGlow or {
+    Enabled = true,
+    Color = Color3.new(1, 1, 1),
+    Thickness = 2,          -- 外枠の太さ
+    Transparency = 0.4,     -- 0=くっきり / 1=透明
+    Pulse = true,           -- ふわっと明滅
+    PulseMin = 0.3,         -- 明滅の最小透明度（小さいほど強く光る）
+    PulseSpeed = 2.0,       -- 明滅速度
+}
+
+local GlowStroke = nil
+local GlowConn = nil
+
+local function RemoveGlow()
+    if GlowConn then pcall(function() GlowConn:Disconnect() end); GlowConn = nil end
+    if GlowStroke then pcall(function() GlowStroke:Destroy() end); GlowStroke = nil end
+end
+
+local function AttachGlow()
+    RemoveGlow()
+    if not Library.WindowGlow.Enabled then return end
+    local W = Library.Window
+    local mf = W and W.MainFrame
+    if not mf then return end
+
+    local stroke = Instance.new("UIStroke")
+    stroke.Name = "_WindowGlow"
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Color = Library.WindowGlow.Color
+    stroke.Thickness = Library.WindowGlow.Thickness
+    stroke.Transparency = Library.WindowGlow.Transparency
+    stroke.ZIndex = (mf.ZIndex or 1) + 1
+    stroke.Parent = mf
+    GlowStroke = stroke
+
+    if Library.WindowGlow.Pulse then
+        local t = 0
+        GlowConn = RunService.Heartbeat:Connect(function(dt)
+            if not GlowStroke or not GlowStroke.Parent then return end
+            t += dt * Library.WindowGlow.PulseSpeed
+            local mid = (Library.WindowGlow.Transparency + Library.WindowGlow.PulseMin) / 2
+            local amp = (Library.WindowGlow.Transparency - Library.WindowGlow.PulseMin) / 2
+            GlowStroke.Transparency = mid + math.sin(t) * amp
+        end)
+    end
+end
+
+-- ウィンドウ生成待ち → 付与
+task.spawn(function()
+    while not Library.Unloaded do
+        if Library.Window and Library.Window.MainFrame then
+            AttachGlow()
+            break
+        end
+        task.wait(0.3)
+    end
+end)
+
+-- 手動API
+function Library:RefreshWindowGlow() AttachGlow() end
+function Library:StopWindowGlow()
+    if GlowStroke then pcall(function() GlowStroke:Destroy() end); GlowStroke = nil end
+    if GlowConn then pcall(function() GlowConn:Disconnect() end); GlowConn = nil end
+end
 return Library
