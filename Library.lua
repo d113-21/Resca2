@@ -17338,7 +17338,7 @@ end)
 
 function Library:RefreshWindowGlow() AttachGlow() end
 function Library:StopWindowGlow() RemoveGlow() end
--- ═══ Toggle / Lock 四角いカスタムボタン化 (v25) ═══
+-- ═══ Toggle / Lock 四角いカスタムボタン化 (v26) ═══
 task.spawn(function()
     local waitT = 0
     while not Library.Unloaded and waitT < 200 do
@@ -17354,29 +17354,32 @@ task.spawn(function()
         end
     end
 
-    -- コンテナ作成
+    -- コンテナ作成（縦並び用に高さを確保）
     local container = Instance.new("Frame")
     container.Name = "_CustomActionButtons"
     container.BackgroundTransparency = 1
     container.Position = UDim2.fromOffset(10, 10)
-    container.Size = UDim2.fromOffset(70, 30)
+    container.Size = UDim2.fromOffset(30, 70) -- 縦に2つ並ぶサイズ
     container.Parent = Library.Floats
 
+    -- 縦並びレイアウト設定
     local layout = Instance.new("UIListLayout", container)
-    layout.FillDirection = Enum.FillDirection.Horizontal
+    layout.FillDirection = Enum.FillDirection.Vertical -- 縦方向に変更
     layout.Padding = UDim.new(0, 10)
-    layout.VerticalAlignment = Enum.VerticalAlignment.Center
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
 
     Library:MakeDraggable(container, container, true)
 
     -- 四角いボタン作成
-    local function CreateSquareButton()
+    local function CreateSquareButton(order)
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.fromOffset(30, 30)
         btn.BackgroundColor3 = Library.Scheme.BackgroundColor
         btn.BorderSizePixel = 0
         btn.Text = ""
         btn.AutoButtonColor = false
+        btn.LayoutOrder = order
         
         local corner = Instance.new("UICorner", btn)
         corner.CornerRadius = UDim.new(0, 6)
@@ -17397,13 +17400,14 @@ task.spawn(function()
         return btn, img
     end
 
-    local toggleBtn, toggleIcon = CreateSquareButton()
+    -- Eye (上) と Lock (下) を生成
+    local toggleBtn, toggleIcon = CreateSquareButton(1)
     toggleBtn.Parent = container
     
-    local lockBtn, lockIcon = CreateSquareButton()
+    local lockBtn, lockIcon = CreateSquareButton(2)
     lockBtn.Parent = container
 
-    -- アイコン適用（スプライトシート対応）
+    -- アイコン適用
     local function ApplyIcon(imgLabel, iconName)
         local data = Library:GetIcon(iconName)
         if not data then
@@ -17442,13 +17446,14 @@ task.spawn(function()
         Library.CantDragForced = not Library.CantDragForced
     end)
 
-    -- 状態監視
+    -- 状態監視とアイコン切り替え
     local lastToggled, lastLocked
     Library:GiveSignal(RunService.Heartbeat:Connect(function()
         local isVisible = Library.Toggled
         if isVisible ~= lastToggled then
             lastToggled = isVisible
-            ApplyIcon(toggleIcon, isVisible and "eye-off" or "eye")
+            -- 順番を反対に（表示中はeye、非表示はeye-off）
+            ApplyIcon(toggleIcon, isVisible and "eye" or "eye-off")
         end
 
         local isLocked = Library.CantDragForced
