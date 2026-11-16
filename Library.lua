@@ -16750,9 +16750,9 @@ task.spawn(function()
     end
 end)
 --// === End Addon v2 ===
---// === Search Bar Buttons (Bell + X) + Notification History (Addon v2) ===
+--// === Search Bar Buttons (Bell + X) + Notification History (Addon v3) ===
 Library.NotifHistory = Library.NotifHistory or { Entries = {}, MaxEntries = 500, Panel = nil, PanelOpen = false }
-Library.SearchBarButtonSize = Library.SearchBarButtonSize or 16   -- 小さめ（重なり回避）
+Library.SearchBarButtonSize = Library.SearchBarButtonSize or 16
 Library.SearchBarButtonGap  = Library.SearchBarButtonGap  or 3
 
 local History = Library.NotifHistory
@@ -16798,11 +16798,15 @@ task.spawn(function()
     end
 end)
 
--- ベル・×ボタン生成
+-- ベル・×ボタン生成（lucide bell / x、色は FontColor）
 local function CreateSearchBarButtons()
     if Library._SearchActionsContainer and Library._SearchActionsContainer.Parent then return true end
     local Bar = FindSearchBar()
     if not Bar or not Bar.Parent then return false end
+
+    if not Library:GetIcon("bell") or not Library:GetIcon("x") then
+        return false
+    end
 
     local BtnSize = Library.SearchBarButtonSize
     local Gap = Library.SearchBarButtonGap
@@ -16822,7 +16826,6 @@ local function CreateSearchBarButtons()
     Container.Parent = Bar.Parent
     Library._SearchActionsContainer = Container
 
-    -- ベル（左）
     local bell = Library:CreateIcon(Library:GetIcon("bell"), {
         AnchorPoint = Vector2.new(0, 0.5),
         Position = UDim2.new(0, 0, 0.5, 0),
@@ -16834,7 +16837,6 @@ local function CreateSearchBarButtons()
     bell.ZIndex = Container.ZIndex
     BellBtn = bell
 
-    -- ×（右、ベルの右）
     local xBtn = Library:CreateIcon(Library:GetIcon("x"), {
         AnchorPoint = Vector2.new(0, 0.5),
         Position = UDim2.new(0, BtnSize + Gap, 0.5, 0),
@@ -16846,7 +16848,6 @@ local function CreateSearchBarButtons()
     xBtn.ZIndex = Container.ZIndex
     CloseBtn = xBtn
 
-    -- バッジ（ベルの右下）
     local badge = Instance.new("TextLabel")
     badge.Name = "_Badge"
     badge.BackgroundTransparency = 1
@@ -17084,5 +17085,100 @@ function Library:CloseScript()
         pcall(function() Library.ScreenGui:Destroy() end)
     end
 end
---// === End Addon v2 ===
+--// === End Addon v3 ===
+--// === Footer Marquee (Addon) ===
+Library.FooterMarquee = Library.FooterMarquee or {
+    Enabled = true,
+    Speed = 60,           -- ピクセル/秒（大きいほど速い）
+    Gap = 80,             -- テキストの繰り返し間隔
+}
+
+local FooterLabel, FooterClip, FooterTween
+
+local function FindFooterLabel()
+    if not Library.ScreenGui or not Library.Window then return nil end
+    local footerText = Library.Window.Footer
+    if typeof(footerText) ~= "string" or footerText == "" then return nil end
+
+    -- Window配下のTextLabelでFooter文字列と一致するものを探す
+    local Main = Library.Window.MainFrame
+    local searchRoot = Main or Library.ScreenGui
+    for _, D in searchRoot:GetDescendants() do
+        if D:IsA("TextLabel") and D.Text == footerText then
+            return D
+        end
+    end
+    return nil
+end
+
+local function StopFooterMarquee()
+    if FooterTween then
+        pcall(function() FooterTween:Cancel() end)
+        FooterTween = nil
+    end
+    if FooterLabel then
+        pcall(function() FooterLabel.Position = UDim2.new(0, 0, FooterLabel.Position.Y.Scale, FooterLabel.Position.Y.Offset) end)
+    end
+end
+
+local function StartFooterMarquee()
+    StopFooterMarquee()
+    if not Library.FooterMarquee.Enabled then return end
+
+    local Label = FindFooterLabel()
+    if not Label then return end
+    FooterLabel = Label
+
+    local parent = Label.Parent
+    if not parent or not parent:IsA("GuiObject") then return end
+
+    -- 親をクリップ領域に
+    parent.ClipsDescendants = true
+
+    -- ラベルを親幅より広く、テキストが収まるサイズに
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+    Label.TextWrapped = false
+
+    local textWidth = Label.TextBounds.X
+    local parentWidth = parent.AbsoluteSize.X
+    if parentWidth <= 0 then task.wait(0.2); parentWidth = parent.AbsoluteSize.X end
+    if textWidth <= 0 then task.wait(0.2); textWidth = Label.TextBounds.X end
+
+    -- ラベルの幅を「親幅 + テキスト幅 + Gap」に
+    local totalWidth = parentWidth + textWidth + Library.FooterMarquee.Gap
+    Label.Size = UDim2.new(0, totalWidth, Label.Size.Y.Scale, Label.Size.Y.Offset)
+
+    -- 初期位置：右端の外からスタート
+    Label.Position = UDim2.new(0, parentWidth, Label.Position.Y.Scale, Label.Position.Y.Offset)
+
+    -- 左端の外まで移動
+    local distance = parentWidth + totalWidth + Library.FooterMarquee.Gap
+    local duration = distance / math.max(1, Library.FooterMarquee.Speed)
+
+    local Info = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out, -1)
+    FooterTween = TweenService:Create(Label, Info, {
+        Position = UDim2.new(0, -totalWidth, Label.Position.Y.Scale, Label.Position.Y.Offset),
+    })
+    FooterTween:Play()
+end
+
+task.spawn(function()
+    -- Footerが生成されるまで待つ
+    while not Library.Unloaded do
+        if FindFooterLabel() then
+            StartFooterMarquee()
+            break
+        end
+        task.wait(0.5)
+    end
+end)
+
+function Library:RefreshFooterMarquee()
+    StartFooterMarquee()
+end
+
+function Library:StopFooterMarquee()
+    StopFooterMarquee()
+end
+--// === End Footer Marquee ===
 return Library
