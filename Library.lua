@@ -16993,7 +16993,7 @@ local function CreateConfirmDialog()
         Instance.new("UICorner", b).CornerRadius = UDim.new(0, 4)
         return b
     end
-    local yes = mk("Yes", "Yes", Library.Scheme.AccentColor or Color3.fromRGB(125, 85, 255), -60)
+    local yes = mk("Yes", "Yes", Color3.fromRGB(25, 65, 170), -60)
     local no = mk("No", "No", Library.Scheme.DestructiveColor or Color3.fromRGB(220, 38, 38), 60)
     yes.MouseButton1Click:Connect(function()
         dialog.Visible = false
