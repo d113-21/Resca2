@@ -69,3 +69,24 @@ do
         true
     )
 end
+
+do
+    local Stats = game:GetService("Stats")
+    local RunService = game:GetService("RunService")
+
+    local Watermark = Library:AddDraggableLabel("test.lua v1 | --:--:-- | 0 FPS | 0 ms", "90655650898082")
+
+    local acc = 0
+    RunService.Heartbeat:Connect(function(dt)
+        acc += dt
+        if acc < 0.5 then return end
+        acc = 0
+        
+        local currentTime = os.date("%H:%M:%S")
+        
+        local fps = math.floor(Stats.Workspace.Heartbeat:GetValue())
+        local ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+        
+        Watermark:SetText(("test.lua v1 | %s | %d FPS | %d ms"):format(currentTime, fps, ping))
+    end)
+end
