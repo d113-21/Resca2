@@ -1,4 +1,4 @@
-local repo = 'https://raw.githubusercontent.com/d113-21/Resca2/main/'
+local repo = 'https://raw.githubusercontent.com/s4tc6yzmkn-glitch/myrepo/main/'
 local LibrarySource = game:HttpGet(repo .. 'Library.lua')
 local Library = loadstring(LibrarySource)()
 local ThemeManager = loadstring(game:HttpGet(repo .. 'ThemeManager.lua'))()
