@@ -170,6 +170,10 @@ local Library = {
 
     --// Obsidian Windows \\--
     ScreenGui = nil,
+
+    --// Window ready gate (blocks callback dispatch until the splash reveal finishes)
+    WindowReady = false,
+    SplashReadyQueue = {},
     Floats = nil,
     Overlay = nil,
 
@@ -380,6 +384,10 @@ local Templates = {
         IconSize = UDim2.fromOffset(30, 30),
 
         AutoShow = true,
+        --// Name shown on the splash overlay only; defaults to Title
+        SplashTitle = nil,
+        Minimizable = false,
+        AutoMinimize = false,
         Center = true,
         Resizable = true,
         AlwaysOnTop = false,
@@ -5697,7 +5705,7 @@ do
 
         local function RefreshFooterInfo()
             FooterInfoLabel.Text = string.format(
-                "#%s â€¢ %d, %d, %d",
+                "#%s Ã¢â‚¬Â¢ %d, %d, %d",
                 ColorPicker.Value:ToHex(),
                 math.floor(ColorPicker.Value.R * 255),
                 math.floor(ColorPicker.Value.G * 255),
@@ -11586,6 +11594,21 @@ function Library:Notify(...)
     return Data
 end
 
+function Library:DrainSplashReadyQueue()
+    if Library.WindowReady then
+        return
+    end
+    Library.WindowReady = true
+    local Queue = Library.SplashReadyQueue
+    Library.SplashReadyQueue = {}
+    for _, Callback in ipairs(Queue) do
+        local Ok, Err = pcall(Callback)
+        if not Ok then
+            warn("[doihi Library] Deferred callback failed: " .. tostring(Err))
+        end
+    end
+end
+
 function Library:CreateWindow(WindowInfo)
     WindowInfo = Library:Validate(WindowInfo, Templates.Window)
     local ViewportSize: Vector2 = workspace.CurrentCamera.ViewportSize
@@ -15499,6 +15522,11 @@ function Library:CreateWindow(WindowInfo)
             return
         end
 
+        --// Window is still expanding; ignore hotkey toggles until reveal finishes
+        if SplashState == 1 then
+            return
+        end
+
         if Library.ActiveLoading then
             if Value == true then
                 return
@@ -15515,7 +15543,25 @@ function Library:CreateWindow(WindowInfo)
             Library.Toggled = not Library.Toggled
         end
 
-        if Library.Animations and Library.Animations.ToggleWindow == true then
+        --// First reveal: play the dedicated splash overlay
+        local SplashDeferred = false
+        if Library.Toggled and SplashState == 0 then
+            if Minimized or (WindowInfo.AutoMinimize and WindowInfo.Minimizable) then
+                SplashState = 3
+            else
+                SplashState = 1
+                SplashDeferred = true
+                print("[splash] toggle defer: SplashState = 1, calling StartStartupSplash")
+                StartStartupSplash()
+            end
+        elseif not Library.Toggled and SplashState == 1 then
+            print("[splash] toggle closed during splash: dismissing")
+            pcall(DismissStartupSplash)
+        end
+
+        if SplashDeferred then
+            -- splash owns the first show; skip normal fade/visibility path
+        elseif Library.Animations and Library.Animations.ToggleWindow == true then
             local Toggled = Library.Toggled
             Fading = true
 
@@ -15672,6 +15718,453 @@ function Library:CreateWindow(WindowInfo)
     if WindowInfo.EnableCompacting and WindowInfo.SidebarCompacted then
         Window:SetSidebarWidth(WindowInfo.SidebarCompactWidth)
     end
+    local Minimized = false
+    local MiniFrame = nil
+
+    --// The startup splash (the icon-only square shown first). The window's
+    --// glow follows it; its shadow and contents never do
+    local SplashFrame
+    local SplashIcon
+    local SplashTitle
+    local SplashStrokes
+
+    --// Startup splash: a dedicated, self-contained overlay. The main window
+    --// itself is never resized, hidden or otherwise mutated mid-flight. It
+    --// appears in the middle of the screen as an icon-only square for two
+    --// seconds, stretches only to the right over one second while the window
+    --// name fades in, then one second later grows into the exact window rect
+    --// and swaps directly into the real window. A failure here can never
+    --// affect the main UI. The splash inherits the window's glow/shadow. \\--
+    local SplashState = 0 -- 0 = not started, 1 = splash playing, 3 = done
+    local SplashHoldTime = 2 -- hold the icon-only square
+    local SplashTitleFadeTime = 1 -- stretch into the icon+title pill
+    local SplashTitleHoldTime = 1 -- hold the pill before the window reveal
+    local SplashExpandTime = 0.8 -- expand the splash into the window rect
+    local SplashTitleTweenInfo = TweenInfo.new(SplashTitleFadeTime, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+    local SplashExpandInfo = TweenInfo.new(SplashExpandTime, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+    --// Splash debug logging (only useful while diagnosing behavior in executors)
+    local function SplashLog(...)
+        local parts = {...}
+        for i = 1, #parts do
+            parts[i] = tostring(parts[i])
+        end
+        print("[splash] " .. table.concat(parts, " "))
+    end
+    --// Gate frame covering the real window during the reveal. Blocks every
+    --// pointer click on the window's UI (toggles, tabs, buttons, ...) until
+    --// the expansion animation finishes.
+    local SplashGate
+    --// Pixels the typed-in name starts offset to the right, before sliding left
+    local SplashTextSlideOffset = 12
+    --// Vertically lift the splash a little above the optical
+    --// centre so it doesn't sit squarely dead centre
+    local SplashVerticalNudge = 48
+
+    --// The name shown on the splash overlay only. Defaults to the window's
+    --// own title, but WindowInfo.SplashTitle lets scripts override it
+    local SplashTitleText = WindowInfo.SplashTitle and tostring(WindowInfo.SplashTitle)
+        or tostring(WindowInfo.Title or "")
+
+    local function SplashTargetCenter(): Vector2
+        local Cam = workspace.CurrentCamera
+        local Vp = Cam and Cam.ViewportSize or Vector2.new(1920, 1080)
+        if WindowInfo.Center then
+            return Vector2.new(Vp.X * 0.5, Vp.Y * 0.5 - SplashVerticalNudge)
+        end
+        local Pos = WindowInfo.Position
+        return Vector2.new(
+            Pos.X.Scale * Vp.X + Pos.X.Offset + WindowInfo.Size.X.Offset * 0.5,
+            Pos.Y.Scale * Vp.Y + Pos.Y.Offset + WindowInfo.Size.Y.Offset * 0.5 - SplashVerticalNudge
+        )
+    end
+
+    local function SplashWindowPosition(): Vector2
+        local Cam = workspace.CurrentCamera
+        local Vp = Cam and Cam.ViewportSize or Vector2.new(1920, 1080)
+        if WindowInfo.Center then
+            return Vector2.new(
+                math.floor((Vp.X - WindowInfo.Size.X.Offset) * 0.5),
+                math.floor((Vp.Y - WindowInfo.Size.Y.Offset) * 0.5)
+            )
+        end
+        local Pos = WindowInfo.Position
+        return Vector2.new(
+            math.floor(Pos.X.Scale * Vp.X + Pos.X.Offset),
+            math.floor(Pos.Y.Scale * Vp.Y + Pos.Y.Offset)
+        )
+    end
+
+    local function BuildStartupSplash()
+        if SplashFrame then
+            return
+        end
+
+        local IconPx = math.floor(math.max(WindowInfo.IconSize.X.Offset, WindowInfo.IconSize.Y.Offset) * 1.45)
+        local Side = math.max(64, IconPx + 26)
+        --// The square starts in the middle; every phase then grows rightwards
+        local Center = SplashTargetCenter()
+
+        --// The square appears in the middle of the screen, then grows
+        --// rightwards and downwards into the window's rect
+        SplashFrame = New("Frame", {
+            BackgroundColor3 = function()
+                return Library:GetBetterColor(Library.Scheme.BackgroundColor, -1)
+            end,
+            ClipsDescendants = true,
+            Name = "StartupSplash",
+            Position = UDim2.fromOffset(math.floor(Center.X - Side * 0.5), math.floor(Center.Y - Side * 0.5)),
+            Size = UDim2.fromOffset(Side, Side),
+            Parent = ScreenGui,
+        })
+        SplashLog("build complete: side =", Side, "Icon =", tostring(WindowInfo.Icon), "pos =", math.floor(Center.X - Side * 0.5), math.floor(Center.Y - Side * 0.5))
+        New("UICorner", {
+            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
+            Parent = SplashFrame,
+        })
+        local OutlineStroke, ShadowStroke = Library:AddOutline(SplashFrame)
+        SplashStrokes = { OutlineStroke, ShadowStroke }
+
+        --// Fixed, manually laid out: the icon stays anchored in place while
+        --// the frame grows rightwards so the title can slide in
+        if WindowInfo.Icon then
+            SplashIcon = New("ImageLabel", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                BackgroundTransparency = 1,
+                Position = UDim2.fromOffset(Side * 0.5, Side * 0.5),
+                Size = UDim2.fromOffset(IconPx, IconPx),
+                Parent = SplashFrame,
+            })
+            local GetIconOk, IconData = pcall(Library.GetCustomIcon, Library, WindowInfo.Icon)
+            if GetIconOk then
+                Library:ApplyLucideIcon(SplashIcon, IconData)
+            end
+        else
+            SplashIcon = New("TextLabel", {
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                BackgroundTransparency = 1,
+                Position = UDim2.fromOffset(Side * 0.5, Side * 0.5),
+                Size = UDim2.fromOffset(IconPx, IconPx),
+                Text = #SplashTitleText > 0 and SplashTitleText:sub(1, 1) or "?",
+                TextScaled = true,
+                Parent = SplashFrame,
+            })
+        end
+
+        --// Title hidden until the name-reveal phase; positioned absolutely
+        SplashTitle = New("TextLabel", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            BackgroundTransparency = 1,
+            Position = UDim2.fromOffset(Side * 0.5, Side * 0.5),
+            Size = UDim2.new(0, 100, 0, 48),
+            Text = SplashTitleText,
+            TextSize = 20,
+            TextTransparency = 1,
+            Visible = false,
+            Parent = SplashFrame,
+        })
+
+        Library:MakeDraggable(SplashFrame, SplashFrame, true, true)
+    end
+
+    --// Phase 2: stretch the square while the window name is typed in character
+    --// by character. The pill grows symmetrically around the screen centre so
+    --// the splash stays centred the whole time; the icon+title group stays
+    --// horizontally centred inside it. \\--
+    local function PlayStartupSplashTitlePhase()
+        SplashLog("2a: entering Phase 2, SplashFrame is:", tostring(SplashFrame and SplashFrame.Parent ~= nil))
+        if not (SplashFrame and SplashFrame.Parent) then
+            SplashLog("2b: SplashFrame missing, aborting")
+            return
+        end
+        SplashLog("2c: Icon is:", tostring(SplashIcon ~= nil), "Title label is:", tostring(SplashTitle ~= nil))
+        SplashLog("2d: SplashTitleText is:", SplashTitleText)
+        SplashLog("2d2: typeof(SplashTitleText) =", tostring(typeof(SplashTitleText)))
+        local FontType = tostring(Library.Scheme.Font and typeof(Library.Scheme.Font) or "nil")
+        SplashLog("2d3: Scheme.Font typeof =", FontType)
+
+        --// Natural width of the title (fallback to an estimate if needed)
+        local TitleWidth
+        local BoundsOk, Bounds = pcall(Library.GetTextBounds, Library, SplashTitleText, Library.Scheme.Font, 20, 10000)
+        if BoundsOk and type(Bounds) == "number" then
+            SplashLog("2e: GetTextBounds returned", tostring(Bounds))
+            TitleWidth = math.floor(Bounds)
+        else
+            SplashLog("2f: GetTextBounds failed (BoundsOk=", tostring(BoundsOk), " type(Bounds)=", tostring(type(Bounds)), ") falling back")
+            local RawTitleOk, RawTitle = pcall(tostring, SplashTitleText)
+            if not RawTitleOk or typeof(RawTitle) ~= "string" then
+                RawTitle = ""
+            end
+            SplashLog("2g: tostring result =", RawTitle, "# =", #RawTitle)
+            TitleWidth = math.floor(#RawTitle * 11)
+        end
+        TitleWidth = math.max(8, TitleWidth)
+
+        local Width = SplashFrame.Size.X.Offset
+        local Height = SplashFrame.Size.Y.Offset
+        local LeftX = SplashFrame.Position.X.Offset
+        local TopY = SplashFrame.Position.Y.Offset
+        local CenterX = LeftX + Width * 0.5
+        local IconWidth = SplashIcon and SplashIcon.Size.X.Offset or 30
+        local PillWidth = math.clamp(math.floor(IconWidth + 8 + TitleWidth + 32), Width, WindowInfo.Size.X.Offset)
+
+        --// Grow both edges around the centre so the splash stays centred
+        local StartX = math.floor(CenterX - PillWidth * 0.5)
+        local ContentW = IconWidth + 8 + TitleWidth
+        local GroupStart = math.floor((PillWidth - ContentW) * 0.5)
+        local IconCenterX = GroupStart + IconWidth * 0.5
+        local TitleCenterX = GroupStart + IconWidth + 8 + TitleWidth * 0.5
+        local CenterY = SplashFrame.Size.Y.Offset * 0.5
+
+        if SplashTitle then
+            SplashTitle.Visible = true
+            --// Typewriter reveal: one character at a time, like being typed.
+            --// Rich text is suspended mid-type so markup never flickers; it
+            --// is restored once the full name has been typed.
+            SplashTitle.RichText = false
+            SplashTitle.TextTransparency = 0
+            SplashTitle.Text = ""
+            SplashTitle.Size = UDim2.new(0, TitleWidth, 0, 48)
+            --// Start slightly to the right, then slide left into place as it types
+            SplashTitle.Position = UDim2.fromOffset(TitleCenterX + SplashTextSlideOffset, CenterY)
+            TweenService:Create(SplashTitle, SplashTitleTweenInfo, {
+                Position = UDim2.fromOffset(TitleCenterX, CenterY),
+            }):Play()
+
+            task.spawn(function()
+                SplashLog("2h: entering typewriter thread. typeof(SplashTitleText)=", tostring(typeof(SplashTitleText)))
+                local FullTextOk, FullText = pcall(tostring, SplashTitleText)
+                if not FullTextOk or typeof(FullText) ~= "string" then
+                    FullText = ""
+                end
+                local Delay = math.max(0.02, math.min(0.055, (SplashTitleFadeTime * 0.85) / math.max(#FullText, 1)))
+                for Index = 1, #FullText do
+                    if not (SplashTitle and SplashTitle.Parent) then
+                        return
+                    end
+                    local Wrote = pcall(function()
+                        SplashTitle.Text = FullText:sub(1, Index)
+                    end)
+                    if not Wrote then
+                        return
+                    end
+                    task.wait(Delay)
+                end
+                pcall(function()
+                    SplashTitle.RichText = true
+                    SplashTitle.Text = FullText
+                end)
+            end)
+        end
+        if SplashIcon then
+            TweenService:Create(SplashIcon, SplashTitleTweenInfo, {
+                Position = UDim2.fromOffset(IconCenterX, CenterY),
+            }):Play()
+        end
+        --// Stretch both edges around the centre so the splash stays centred
+        TweenService:Create(SplashFrame, SplashTitleTweenInfo, {
+            Position = UDim2.fromOffset(StartX, TopY),
+            Size = UDim2.fromOffset(PillWidth, Height),
+        }):Play()
+    end
+
+    --// Phase 3: expand the real window from the pill rect to its final size.
+    --// MainFrame only - contents are the real ones, identical to the main
+    --// window at every moment of the expansion (revealed by clipping). The
+    --// splash shell dissolves into the same spot it came from. \\--
+    local function ExpandStartupSplashIntoWindow()
+        if not (SplashFrame and SplashFrame.Parent) then
+            return
+        end
+        if not (MainFrame and MainFrame.Parent) then
+            ShowStartupSplashFallback()
+            return
+        end
+        if not Library.Toggled or Minimized then
+            --// User closed the window during the splash; vanish it silently
+            DismissStartupSplash()
+            return
+        end
+
+        local FullWidth = WindowInfo.Size.X.Offset
+        local FullHeight = WindowInfo.Size.Y.Offset
+        local WindowPos = SplashWindowPosition()
+        local FadeInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+        local ExpandOk, ExpandErr = pcall(function()
+            --// Keep the real window clipped while it grows so off-rect
+            --// content stays hidden until the expansion reaches it
+            MainFrame.ClipsDescendants = true
+
+            --// Pick up the splash's current rect, then grow into the final one
+            local StartPos = SplashFrame.Position
+            local Cam = workspace.CurrentCamera
+            local Vp = Cam and Cam.ViewportSize or Vector2.new(1920, 1080)
+            local StartX = math.floor(StartPos.X.Scale * Vp.X + StartPos.X.Offset)
+            local StartY = math.floor(StartPos.Y.Scale * Vp.Y + StartPos.Y.Offset)
+
+            --// Start the real window at the splash's rect, untouched otherwise
+            MainFrame.Size = UDim2.fromOffset(SplashFrame.Size.X.Offset, SplashFrame.Size.Y.Offset)
+            MainFrame.Position = UDim2.fromOffset(StartX, StartY)
+            MainFrame.Visible = true
+
+            --// Block pointer input into the expanding window; released
+            --// when the reveal finishes
+            SplashGate = New("TextButton", {
+                Active = true,
+                BackgroundTransparency = 1,
+                Name = "SplashGate",
+                ZIndex = 100000,
+                Size = UDim2.fromScale(1, 1),
+                Text = "",
+                Parent = MainFrame,
+            })
+
+            --// The real window supplies its own icon and title; the splash's
+            --// are hidden instantly so they never draw on top of the real
+            --// ones (no afterimage). The clip hides the handoff entirely.
+            if SplashIcon then
+                SplashIcon.Visible = false
+            end
+            if SplashTitle then
+                SplashTitle.Visible = false
+            end
+            --// Dissolve the splash shell over the same rect
+            if SplashFrame and SplashFrame.Parent then
+                TweenService:Create(SplashFrame, FadeInfo, { BackgroundTransparency = 1 }):Play()
+            end
+            if SplashStrokes then
+                for _, Stroke in ipairs(SplashStrokes) do
+                    if Stroke and Stroke.Parent then
+                        TweenService:Create(Stroke, FadeInfo, { Transparency = 1 }):Play()
+                    end
+                end
+            end
+
+            --// Expand the real window into its final rect
+            TweenService:Create(MainFrame, SplashExpandInfo, {
+                Size = UDim2.fromOffset(FullWidth, FullHeight),
+                Position = UDim2.fromOffset(WindowPos.X, WindowPos.Y),
+            }):Play()
+
+            --// Destroy the splash shell as soon as the window covers it
+            task.delay(FadeInfo.Time + 0.05, function()
+                local Frame = SplashFrame
+                SplashFrame, SplashIcon, SplashTitle, SplashStrokes = nil, nil, nil, nil
+                SplashState = 3
+                if Frame and Frame.Parent then
+                    Frame:Destroy()
+                end
+            end)
+
+            --// Restore the clipping once growth completes. Nothing else is
+            --// touched: the window's own layout (including the compact
+            --// sidebar) is left exactly as the window created it.
+            task.delay(SplashExpandInfo.Time, function()
+                if not (MainFrame and MainFrame.Parent) then
+                    return
+                end
+                MainFrame.ClipsDescendants = false
+                --// Re-enable input on the window now that the reveal is over
+                if SplashGate and SplashGate.Parent then
+                    SplashGate:Destroy()
+                end
+                SplashGate = nil
+                --// Fire every callback that was deferred during the reveal
+                Library:DrainSplashReadyQueue()
+            end)
+        end)
+
+        if not ExpandOk then
+            warn("[doihi Library] Startup splash could not expand: " .. tostring(ExpandErr) .. " -- restoring the window instantly")
+            ShowStartupSplashFallback()
+        end
+    end
+
+    --// Instantly remove the splash without touching the real window
+    local function DismissStartupSplash()
+        if SplashState == 3 then
+            return
+        end
+        SplashState = 3
+        local Frame = SplashFrame
+        SplashFrame, SplashIcon, SplashTitle, SplashStrokes = nil, nil, nil, nil
+        if Frame and Frame.Parent then
+            Frame:Destroy()
+        end
+        --// Ensure deferred callbacks run even if the splash was dismissed early
+        Library:DrainSplashReadyQueue()
+    end
+
+    --// Fallback: give up on the animation and show the real window
+    local function ShowStartupSplashFallback()
+        DismissStartupSplash()
+        if MainFrame and MainFrame.Parent then
+            --// Restore the window to its full, final geometry
+            local FullWidth = WindowInfo.Size.X.Offset
+            local FullHeight = WindowInfo.Size.Y.Offset
+            local WindowPos = SplashWindowPosition()
+            MainFrame.Position = UDim2.fromOffset(WindowPos.X, WindowPos.Y)
+            MainFrame.Size = UDim2.fromOffset(FullWidth, FullHeight)
+            MainFrame.ClipsDescendants = false
+            if Library.Toggled and not Minimized then
+                MainFrame.Visible = true
+            end
+        end
+    end
+
+    local function StartStartupSplash()
+        SplashLog("StartStartupSplash state=", tostring(SplashState))
+        if SplashState ~= 1 then
+            return
+        end
+        local Built, BuildErr = pcall(BuildStartupSplash)
+        if not Built then
+            warn("[doihi Library] Startup splash failed to build: " .. tostring(BuildErr) .. " -- showing the window normally")
+            ShowStartupSplashFallback()
+            return
+        end
+        SplashLog("registered task.delay for", SplashHoldTime, "seconds")
+        task.delay(SplashHoldTime, function()
+            SplashLog("-> pill phase firing")
+            if SplashState ~= 1 then
+                SplashLog("aborted: SplashState =", tostring(SplashState))
+                return
+            end
+            local TitleOk, TitleErr = pcall(PlayStartupSplashTitlePhase)
+            if not TitleOk then
+                warn("[doihi Library] Startup splash name reveal failed: " .. tostring(TitleErr) .. " -- showing the window normally")
+                ShowStartupSplashFallback()
+                return
+            end
+            SplashLog("-> pill phase played ok")
+            task.delay(SplashTitleFadeTime + SplashTitleHoldTime, function()
+                SplashLog("-> expand phase firing")
+                if SplashState ~= 1 then
+                    SplashLog("aborted: SplashState =", tostring(SplashState))
+                    return
+                end
+                local ExpandOk, ExpandErr = pcall(ExpandStartupSplashIntoWindow)
+                if not ExpandOk then
+                    warn("[doihi Library] Startup splash could not expand: " .. tostring(ExpandErr) .. " -- showing the window normally")
+                    ShowStartupSplashFallback()
+                    return
+                end
+                SplashLog("-> expand phase played ok")
+            end)
+        end)
+    end
+
+
+    --// Show the startup icon immediately; the rest of the window is built
+    --// behind it, so the user gets instant feedback instead of a blank screen
+    if WindowInfo.AutoShow and not Library.ActiveLoading and not (WindowInfo.AutoMinimize and WindowInfo.Minimizable) then
+        print("[splash] early build at createwindow locals time")
+        pcall(BuildStartupSplash)
+    else
+        print("[splash] early build skipped (AutoShow=" .. tostring(WindowInfo.AutoShow) .. " ActiveLoading=" .. tostring(Library.ActiveLoading) .. " AutoMinimize=" .. tostring(WindowInfo.AutoMinimize) .. ")")
+    end
+
+
     if WindowInfo.AutoShow and not Library.ActiveLoading then
         task.spawn(Library.Toggle)
     end
@@ -16571,554 +17064,6 @@ function Library:Unload()
 end
 
 getgenv().Library = Library
-    --// The startup splash (the icon-only square shown first). The window's
-    --// glow follows it; its shadow and contents never do
-    local SplashFrame
-    local SplashIcon
-    local SplashTitle
-    local SplashStrokes
-
-    --// Startup splash: a dedicated, self-contained overlay. The main window
-    --// itself is never resized, hidden or otherwise mutated mid-flight. It
-    --// appears in the middle of the screen as an icon-only square for two
-    --// seconds, stretches only to the right over one second while the window
-    --// name fades in, then one second later grows into the exact window rect
-    --// and swaps directly into the real window. A failure here can never
-    --// affect the main UI. The splash inherits the window's glow/shadow. \\--
-    local SplashState = 0 -- 0 = not started, 1 = splash playing, 3 = done
-    local SplashHoldTime = 2 -- hold the icon-only square
-    local SplashTitleFadeTime = 1 -- stretch into the icon+title pill
-    local SplashTitleHoldTime = 1 -- hold the pill before the window reveal
-    local SplashExpandTime = 0.8 -- expand the splash into the window rect
-    local SplashTitleTweenInfo = TweenInfo.new(SplashTitleFadeTime, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-    local SplashExpandInfo = TweenInfo.new(SplashExpandTime, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-    --// Splash debug logging (only useful while diagnosing behavior in executors)
-    local function SplashLog(...)
-        local parts = {...}
-        for i = 1, #parts do
-            parts[i] = tostring(parts[i])
-        end
-        print("[splash] " .. table.concat(parts, " "))
-    end
-    --// Gate frame covering the real window during the reveal. Blocks every
-    --// pointer click on the window's UI (toggles, tabs, buttons, ...) until
-    --// the expansion animation finishes.
-    local SplashGate
-    --// Pixels the typed-in name starts offset to the right, before sliding left
-    local SplashTextSlideOffset = 12
-    --// Vertically lift the splash a little above the optical
-    --// centre so it doesn't sit squarely dead centre
-    local SplashVerticalNudge = 48
-
-    --// The name shown on the splash overlay only. Defaults to the window's
-    --// own title, but WindowInfo.SplashTitle lets scripts override it
-    local SplashTitleText = WindowInfo.SplashTitle and tostring(WindowInfo.SplashTitle)
-        or tostring(WindowInfo.Title or "")
-
-    local function SplashTargetCenter(): Vector2
-        local Cam = workspace.CurrentCamera
-        local Vp = Cam and Cam.ViewportSize or Vector2.new(1920, 1080)
-        if WindowInfo.Center then
-            return Vector2.new(Vp.X * 0.5, Vp.Y * 0.5 - SplashVerticalNudge)
-        end
-        local Pos = WindowInfo.Position
-        return Vector2.new(
-            Pos.X.Scale * Vp.X + Pos.X.Offset + WindowInfo.Size.X.Offset * 0.5,
-            Pos.Y.Scale * Vp.Y + Pos.Y.Offset + WindowInfo.Size.Y.Offset * 0.5 - SplashVerticalNudge
-        )
-    end
-
-    local function SplashWindowPosition(): Vector2
-        local Cam = workspace.CurrentCamera
-        local Vp = Cam and Cam.ViewportSize or Vector2.new(1920, 1080)
-        if WindowInfo.Center then
-            return Vector2.new(
-                math.floor((Vp.X - WindowInfo.Size.X.Offset) * 0.5),
-                math.floor((Vp.Y - WindowInfo.Size.Y.Offset) * 0.5)
-            )
-        end
-        local Pos = WindowInfo.Position
-        return Vector2.new(
-            math.floor(Pos.X.Scale * Vp.X + Pos.X.Offset),
-            math.floor(Pos.Y.Scale * Vp.Y + Pos.Y.Offset)
-        )
-    end
-
-    local function BuildStartupSplash()
-        if SplashFrame then
-            return
-        end
-
-        local IconPx = math.floor(math.max(WindowInfo.IconSize.X.Offset, WindowInfo.IconSize.Y.Offset) * 1.45)
-        local Side = math.max(64, IconPx + 26)
-        --// The square starts in the middle; every phase then grows rightwards
-        local Center = SplashTargetCenter()
-
-        --// The square appears in the middle of the screen, then grows
-        --// rightwards and downwards into the window's rect
-        SplashFrame = New("Frame", {
-            BackgroundColor3 = function()
-                return Library:GetBetterColor(Library.Scheme.BackgroundColor, -1)
-            end,
-            ClipsDescendants = true,
-            Name = "StartupSplash",
-            Position = UDim2.fromOffset(math.floor(Center.X - Side * 0.5), math.floor(Center.Y - Side * 0.5)),
-            Size = UDim2.fromOffset(Side, Side),
-            Parent = ScreenGui,
-        })
-        SplashLog("build complete: side =", Side, "Icon =", tostring(WindowInfo.Icon), "pos =", math.floor(Center.X - Side * 0.5), math.floor(Center.Y - Side * 0.5))
-        New("UICorner", {
-            CornerRadius = UDim.new(0, WindowInfo.CornerRadius),
-            Parent = SplashFrame,
-        })
-        local OutlineStroke, ShadowStroke = Library:AddOutline(SplashFrame)
-        SplashStrokes = { OutlineStroke, ShadowStroke }
-
-        --// Fixed, manually laid out: the icon stays anchored in place while
-        --// the frame grows rightwards so the title can slide in
-        if WindowInfo.Icon then
-            SplashIcon = New("ImageLabel", {
-                AnchorPoint = Vector2.new(0.5, 0.5),
-                BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(Side * 0.5, Side * 0.5),
-                Size = UDim2.fromOffset(IconPx, IconPx),
-                Parent = SplashFrame,
-            })
-            local GetIconOk, IconData = pcall(Library.GetCustomIcon, Library, WindowInfo.Icon)
-            if GetIconOk then
-                Library:ApplyLucideIcon(SplashIcon, IconData)
-            end
-        else
-            SplashIcon = New("TextLabel", {
-                AnchorPoint = Vector2.new(0.5, 0.5),
-                BackgroundTransparency = 1,
-                Position = UDim2.fromOffset(Side * 0.5, Side * 0.5),
-                Size = UDim2.fromOffset(IconPx, IconPx),
-                Text = #SplashTitleText > 0 and SplashTitleText:sub(1, 1) or "?",
-                TextScaled = true,
-                Parent = SplashFrame,
-            })
-        end
-
-        --// Title hidden until the name-reveal phase; positioned absolutely
-        SplashTitle = New("TextLabel", {
-            AnchorPoint = Vector2.new(0.5, 0.5),
-            BackgroundTransparency = 1,
-            Position = UDim2.fromOffset(Side * 0.5, Side * 0.5),
-            Size = UDim2.new(0, 100, 0, 48),
-            Text = SplashTitleText,
-            TextSize = 20,
-            TextTransparency = 1,
-            Visible = false,
-            Parent = SplashFrame,
-        })
-
-        Library:MakeDraggable(SplashFrame, SplashFrame, true, true)
-    end
-
-    --// Phase 2: stretch the square while the window name is typed in character
-    --// by character. The pill grows symmetrically around the screen centre so
-    --// the splash stays centred the whole time; the icon+title group stays
-    --// horizontally centred inside it. \\--
-    local function PlayStartupSplashTitlePhase()
-        SplashLog("2a: entering Phase 2, SplashFrame is:", tostring(SplashFrame and SplashFrame.Parent ~= nil))
-        if not (SplashFrame and SplashFrame.Parent) then
-            SplashLog("2b: SplashFrame missing, aborting")
-            return
-        end
-        SplashLog("2c: Icon is:", tostring(SplashIcon ~= nil), "Title label is:", tostring(SplashTitle ~= nil))
-        SplashLog("2d: SplashTitleText is:", SplashTitleText)
-        SplashLog("2d2: typeof(SplashTitleText) =", tostring(typeof(SplashTitleText)))
-        local FontType = tostring(Library.Scheme.Font and typeof(Library.Scheme.Font) or "nil")
-        SplashLog("2d3: Scheme.Font typeof =", FontType)
-
-        --// Natural width of the title (fallback to an estimate if needed)
-        local TitleWidth
-        local BoundsOk, Bounds = pcall(Library.GetTextBounds, Library, SplashTitleText, Library.Scheme.Font, 20, 10000)
-        if BoundsOk and type(Bounds) == "number" then
-            SplashLog("2e: GetTextBounds returned", tostring(Bounds))
-            TitleWidth = math.floor(Bounds)
-        else
-            SplashLog("2f: GetTextBounds failed (BoundsOk=", tostring(BoundsOk), " type(Bounds)=", tostring(type(Bounds)), ") falling back")
-            local RawTitleOk, RawTitle = pcall(tostring, SplashTitleText)
-            if not RawTitleOk or typeof(RawTitle) ~= "string" then
-                RawTitle = ""
-            end
-            SplashLog("2g: tostring result =", RawTitle, "# =", #RawTitle)
-            TitleWidth = math.floor(#RawTitle * 11)
-        end
-        TitleWidth = math.max(8, TitleWidth)
-
-        local Width = SplashFrame.Size.X.Offset
-        local Height = SplashFrame.Size.Y.Offset
-        local LeftX = SplashFrame.Position.X.Offset
-        local TopY = SplashFrame.Position.Y.Offset
-        local CenterX = LeftX + Width * 0.5
-        local IconWidth = SplashIcon and SplashIcon.Size.X.Offset or 30
-        local PillWidth = math.clamp(math.floor(IconWidth + 8 + TitleWidth + 32), Width, WindowInfo.Size.X.Offset)
-
-        --// Grow both edges around the centre so the splash stays centred
-        local StartX = math.floor(CenterX - PillWidth * 0.5)
-        local ContentW = IconWidth + 8 + TitleWidth
-        local GroupStart = math.floor((PillWidth - ContentW) * 0.5)
-        local IconCenterX = GroupStart + IconWidth * 0.5
-        local TitleCenterX = GroupStart + IconWidth + 8 + TitleWidth * 0.5
-        local CenterY = SplashFrame.Size.Y.Offset * 0.5
-
-        if SplashTitle then
-            SplashTitle.Visible = true
-            --// Typewriter reveal: one character at a time, like being typed.
-            --// Rich text is suspended mid-type so markup never flickers; it
-            --// is restored once the full name has been typed.
-            SplashTitle.RichText = false
-            SplashTitle.TextTransparency = 0
-            SplashTitle.Text = ""
-            SplashTitle.Size = UDim2.new(0, TitleWidth, 0, 48)
-            --// Start slightly to the right, then slide left into place as it types
-            SplashTitle.Position = UDim2.fromOffset(TitleCenterX + SplashTextSlideOffset, CenterY)
-            TweenService:Create(SplashTitle, SplashTitleTweenInfo, {
-                Position = UDim2.fromOffset(TitleCenterX, CenterY),
-            }):Play()
-
-            task.spawn(function()
-                SplashLog("2h: entering typewriter thread. typeof(SplashTitleText)=", tostring(typeof(SplashTitleText)))
-                local FullTextOk, FullText = pcall(tostring, SplashTitleText)
-                if not FullTextOk or typeof(FullText) ~= "string" then
-                    FullText = ""
-                end
-                local Delay = math.max(0.02, math.min(0.055, (SplashTitleFadeTime * 0.85) / math.max(#FullText, 1)))
-                for Index = 1, #FullText do
-                    if not (SplashTitle and SplashTitle.Parent) then
-                        return
-                    end
-                    local Wrote = pcall(function()
-                        SplashTitle.Text = FullText:sub(1, Index)
-                    end)
-                    if not Wrote then
-                        return
-                    end
-                    task.wait(Delay)
-                end
-                pcall(function()
-                    SplashTitle.RichText = true
-                    SplashTitle.Text = FullText
-                end)
-            end)
-        end
-        if SplashIcon then
-            TweenService:Create(SplashIcon, SplashTitleTweenInfo, {
-                Position = UDim2.fromOffset(IconCenterX, CenterY),
-            }):Play()
-        end
-        --// Stretch both edges around the centre so the splash stays centred
-        TweenService:Create(SplashFrame, SplashTitleTweenInfo, {
-            Position = UDim2.fromOffset(StartX, TopY),
-            Size = UDim2.fromOffset(PillWidth, Height),
-        }):Play()
-    end
-
-    --// Phase 3: expand the real window from the pill rect to its final size.
-    --// MainFrame only - contents are the real ones, identical to the main
-    --// window at every moment of the expansion (revealed by clipping). The
-    --// splash shell dissolves into the same spot it came from. \\--
-    local function ExpandStartupSplashIntoWindow()
-        if not (SplashFrame and SplashFrame.Parent) then
-            return
-        end
-        if not (MainFrame and MainFrame.Parent) then
-            ShowStartupSplashFallback()
-            return
-        end
-        if not Library.Toggled or Minimized then
-            --// User closed the window during the splash; vanish it silently
-            DismissStartupSplash()
-            return
-        end
-
-        local FullWidth = WindowInfo.Size.X.Offset
-        local FullHeight = WindowInfo.Size.Y.Offset
-        local WindowPos = SplashWindowPosition()
-        local FadeInfo = TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-
-        local ExpandOk, ExpandErr = pcall(function()
-            --// Keep the real window clipped while it grows so off-rect
-            --// content stays hidden until the expansion reaches it
-            MainFrame.ClipsDescendants = true
-
-            --// Pick up the splash's current rect, then grow into the final one
-            local StartPos = SplashFrame.Position
-            local Cam = workspace.CurrentCamera
-            local Vp = Cam and Cam.ViewportSize or Vector2.new(1920, 1080)
-            local StartX = math.floor(StartPos.X.Scale * Vp.X + StartPos.X.Offset)
-            local StartY = math.floor(StartPos.Y.Scale * Vp.Y + StartPos.Y.Offset)
-
-            --// Start the real window at the splash's rect, untouched otherwise
-            MainFrame.Size = UDim2.fromOffset(SplashFrame.Size.X.Offset, SplashFrame.Size.Y.Offset)
-            MainFrame.Position = UDim2.fromOffset(StartX, StartY)
-            MainFrame.Visible = true
-
-            --// Block pointer input into the expanding window; released
-            --// when the reveal finishes
-            SplashGate = New("TextButton", {
-                Active = true,
-                BackgroundTransparency = 1,
-                Name = "SplashGate",
-                ZIndex = 100000,
-                Size = UDim2.fromScale(1, 1),
-                Text = "",
-                Parent = MainFrame,
-            })
-
-            --// The real window supplies its own icon and title; the splash's
-            --// are hidden instantly so they never draw on top of the real
-            --// ones (no afterimage). The clip hides the handoff entirely.
-            if SplashIcon then
-                SplashIcon.Visible = false
-            end
-            if SplashTitle then
-                SplashTitle.Visible = false
-            end
-            --// Dissolve the splash shell over the same rect
-            if SplashFrame and SplashFrame.Parent then
-                TweenService:Create(SplashFrame, FadeInfo, { BackgroundTransparency = 1 }):Play()
-            end
-            if SplashStrokes then
-                for _, Stroke in ipairs(SplashStrokes) do
-                    if Stroke and Stroke.Parent then
-                        TweenService:Create(Stroke, FadeInfo, { Transparency = 1 }):Play()
-                    end
-                end
-            end
-
-            --// Expand the real window into its final rect
-            TweenService:Create(MainFrame, SplashExpandInfo, {
-                Size = UDim2.fromOffset(FullWidth, FullHeight),
-                Position = UDim2.fromOffset(WindowPos.X, WindowPos.Y),
-            }):Play()
-
-            --// Destroy the splash shell as soon as the window covers it
-            task.delay(FadeInfo.Time + 0.05, function()
-                local Frame = SplashFrame
-                SplashFrame, SplashIcon, SplashTitle, SplashStrokes = nil, nil, nil, nil
-                SplashState = 3
-                if Frame and Frame.Parent then
-                    Frame:Destroy()
-                end
-            end)
-
-            --// Restore the clipping once growth completes. Nothing else is
-            --// touched: the window's own layout (including the compact
-            --// sidebar) is left exactly as the window created it.
-            task.delay(SplashExpandInfo.Time, function()
-                if not (MainFrame and MainFrame.Parent) then
-                    return
-                end
-                MainFrame.ClipsDescendants = false
-                --// Re-enable input on the window now that the reveal is over
-                if SplashGate and SplashGate.Parent then
-                    SplashGate:Destroy()
-                end
-                SplashGate = nil
-                --// Fire every callback that was deferred during the reveal
-                Library:DrainSplashReadyQueue()
-            end)
-        end)
-
-        if not ExpandOk then
-            warn("[doihi Library] Startup splash could not expand: " .. tostring(ExpandErr) .. " -- restoring the window instantly")
-            ShowStartupSplashFallback()
-        end
-    end
-
-    --// Instantly remove the splash without touching the real window
-    local function DismissStartupSplash()
-        if SplashState == 3 then
-            return
-        end
-        SplashState = 3
-        local Frame = SplashFrame
-        SplashFrame, SplashIcon, SplashTitle, SplashStrokes = nil, nil, nil, nil
-        if Frame and Frame.Parent then
-            Frame:Destroy()
-        end
-        --// Ensure deferred callbacks run even if the splash was dismissed early
-        Library:DrainSplashReadyQueue()
-    end
-
-    --// Fallback: give up on the animation and show the real window
-    local function ShowStartupSplashFallback()
-        DismissStartupSplash()
-        if MainFrame and MainFrame.Parent then
-            --// Restore the window to its full, final geometry
-            local FullWidth = WindowInfo.Size.X.Offset
-            local FullHeight = WindowInfo.Size.Y.Offset
-            local WindowPos = SplashWindowPosition()
-            MainFrame.Position = UDim2.fromOffset(WindowPos.X, WindowPos.Y)
-            MainFrame.Size = UDim2.fromOffset(FullWidth, FullHeight)
-            MainFrame.ClipsDescendants = false
-            if Library.Toggled and not Minimized then
-                MainFrame.Visible = true
-            end
-        end
-    end
-
-    local function StartStartupSplash()
-        SplashLog("StartStartupSplash state=", tostring(SplashState))
-        if SplashState ~= 1 then
-            return
-        end
-        local Built, BuildErr = pcall(BuildStartupSplash)
-        if not Built then
-            warn("[doihi Library] Startup splash failed to build: " .. tostring(BuildErr) .. " -- showing the window normally")
-            ShowStartupSplashFallback()
-            return
-        end
-        SplashLog("registered task.delay for", SplashHoldTime, "seconds")
-        task.delay(SplashHoldTime, function()
-            SplashLog("-> pill phase firing")
-            if SplashState ~= 1 then
-                SplashLog("aborted: SplashState =", tostring(SplashState))
-                return
-            end
-            local TitleOk, TitleErr = pcall(PlayStartupSplashTitlePhase)
-            if not TitleOk then
-                warn("[doihi Library] Startup splash name reveal failed: " .. tostring(TitleErr) .. " -- showing the window normally")
-                ShowStartupSplashFallback()
-                return
-            end
-            SplashLog("-> pill phase played ok")
-            task.delay(SplashTitleFadeTime + SplashTitleHoldTime, function()
-                SplashLog("-> expand phase firing")
-                if SplashState ~= 1 then
-                    SplashLog("aborted: SplashState =", tostring(SplashState))
-                    return
-                end
-                local ExpandOk, ExpandErr = pcall(ExpandStartupSplashIntoWindow)
-                if not ExpandOk then
-                    warn("[doihi Library] Startup splash could not expand: " .. tostring(ExpandErr) .. " -- showing the window normally")
-                    ShowStartupSplashFallback()
-                    return
-                end
-                SplashLog("-> expand phase played ok")
-            end)
-        end)
-    end
-
-
-    --// Show the startup icon immediately; the rest of the window is built
-    --// behind it, so the user gets instant feedback instead of a blank screen
-    if WindowInfo.AutoShow and not Library.ActiveLoading and not (WindowInfo.AutoMinimize and WindowInfo.Minimizable) then
-        print("[splash] early build at createwindow locals time")
-        pcall(BuildStartupSplash)
-    else
-        print("[splash] early build skipped (AutoShow=" .. tostring(WindowInfo.AutoShow) .. " ActiveLoading=" .. tostring(Library.ActiveLoading) .. " AutoMinimize=" .. tostring(WindowInfo.AutoMinimize) .. ")")
-    end
-
-    function Window:Toggle(Value: boolean?)
-        if Fading then
-            return
-        end
-
-        --// Window is still expanding; ignore hotkey toggles until reveal finishes
-        if SplashState == 1 then
-            return
-        end
-
-        if Library.ActiveLoading then
-            if Value == true then
-                return
-            end
-
-            if not Library.Toggled then
-                return
-            end
-        end
-
-        if typeof(Value) == "boolean" then
-            Library.Toggled = Value
-        else
-            Library.Toggled = not Library.Toggled
-        end
-
-        --// First reveal: play the dedicated splash overlay and keep the real
-        --// window hidden; the splash dissolves into it when it finishes. If
-        --// the user closes the window mid-splash, dismiss it without showing.
-        local SplashDeferred = false
-        if Library.Toggled and SplashState == 0 then
-            if Minimized or (WindowInfo.AutoMinimize and WindowInfo.Minimizable) then
-                SplashState = 3
-            else
-                SplashState = 1
-                SplashDeferred = true
-                print("[splash] toggle defer: SplashState = 1, calling StartStartupSplash")
-                StartStartupSplash()
-            end
-        elseif not Library.Toggled and SplashState == 1 then
-            print("[splash] toggle closed during splash: dismissing")
-            pcall(DismissStartupSplash)
-        end
-
-        if not SplashDeferred then
-        if Library.Animations and Library.Animations.ToggleWindow == true then
-            local FadeTime = Library.WindowAnimationInfo.Time
-            Fading = true
-
-            if Library.Toggled then
-                MainFrame.Visible = true
-            end
-
-            if Library.Toggled then
-                FadeInstance(MainFrame, { "BackgroundTransparency" })
-                task.wait(FadeTime / 2)
-            else
-                task.delay(FadeTime / 2, FadeInstance, MainFrame, { "BackgroundTransparency" })
-            end
-
-            for _, Instance in MainFrame:GetDescendants() do
-                if Instance == TopBar then
-                    continue
-                end
-
-                if Instance:IsA("GuiObject") then
-                    local ClassName = Instance.ClassName
-                    if ClassName == "ImageLabel" or ClassName == "ImageButton" then
-                        FadeInstance(Instance, ImageProperties)
-                    elseif ClassName == "TextLabel" or ClassName == "TextBox" or ClassName == "TextButton" then
-                        FadeInstance(Instance, TextProperties)
-                    else
-                        FadeInstance(Instance, GuiProperties)
-                    end
-                elseif Instance.ClassName == "UIStroke" then
-                    FadeInstance(Instance, StrokeProperties)
-                end
-            end
-
-            task.delay(FadeTime, function()
-                MainFrame.Visible = Library.Toggled
-                Fading = false
-        if MiniFrame then
-            MiniFrame.Visible = Library.Toggled and Minimized
-        end
-            end)
-        else
-            MainFrame.Visible = Library.Toggled
-        end
-        end --// SplashDeferred
-
-        if WindowInfo.UnlockMouseWhileOpen then
-            ModalElement.Modal = Library.Toggled
-        end
-
-        if Library.Toggled and not Library.IsMobile then
-            local ShowCursorBinding = Library.ShowCursorBinding
-            Library.OriginalMouseIconEnabled = UserInputService.MouseIconEnabled
-
-            pcall(function() RunService:UnbindFromRenderStep(ShowCursorBinding) end)
-            RunService:BindToRenderStep(ShowCursorBinding, Enum.RenderPriority.Last.Value, function()
-                UserInputService.MouseIconEnabled = not Library.ShowCustomCursor
-
-
--- EOF: includes Window:Toggle splash trigger + ToggleWindow fade
 --// === Obsidian Addons Pack (v8 - Final) ===
 Library.NotifHistory = Library.NotifHistory or {
     Entries = {}, MaxEntries = 500, Panel = nil, Dialog = nil, PanelOpen = false,
@@ -17135,7 +17080,7 @@ local History = Library.NotifHistory
 local NH = History
 local BellBtn, CloseBtn
 
--- 追加: X作成ヘルパー（アイコン自体をクリック可能ボタンにする）
+-- è¿½åŠ : Xä½œæˆãƒ˜ãƒ«ãƒ‘ãƒ¼ï¼ˆã‚¢ã‚¤ã‚³ãƒ³è‡ªä½“ã‚’ã‚¯ãƒªãƒƒã‚¯å¯èƒ½ãƒœã‚¿ãƒ³ã«ã™ã‚‹ï¼‰
 local function MakeCloseButton(parent, onClick, zIndex)
     local icon = Library:GetIcon("x")
     local btn
@@ -17166,7 +17111,7 @@ local function MakeCloseButton(parent, onClick, zIndex)
     return btn
 end
 
--- ═══ ① 通知キャプチャ ═══
+-- â•â•â• â‘  é€šçŸ¥ã‚­ãƒ£ãƒ—ãƒãƒ£ â•â•â•
 local _suppressSetCore = false
 local function AddHistoryEntry(title, text)
     local t1 = title and tostring(title) or ""
@@ -17261,7 +17206,7 @@ do
     end
 end
 
--- ═══ ② サーチバー ベル / × ═══
+-- â•â•â• â‘¡ ã‚µãƒ¼ãƒãƒãƒ¼ ãƒ™ãƒ« / Ã— â•â•â•
 local function FindSearchBar()
     if not Library.ScreenGui then return nil end
     for _, D in Library.ScreenGui:GetDescendants() do
@@ -17340,7 +17285,7 @@ Library:GiveSignal(RunService.Heartbeat:Connect(function()
     C.Position = UDim2.fromOffset(barRight + Library.SearchBarButtonGap, Bar.Parent.AbsoluteSize.Y / 2)
 end))
 
--- ═══ ③ 通知履歴パネル（X付） ═══
+-- â•â•â• â‘¢ é€šçŸ¥å±¥æ­´ãƒ‘ãƒãƒ«ï¼ˆXä»˜ï¼‰ â•â•â•
 local function CreateHistoryPanel()
     if History.Panel and History.Panel.Parent then return History.Panel end
 
@@ -17372,7 +17317,7 @@ local function CreateHistoryPanel()
     header.ZIndex = 501
     header.Parent = panel
 
-    -- ★ X 修正: アイコン自体をクリック可能ボタンとして直接配置
+    -- â˜… X ä¿®æ­£: ã‚¢ã‚¤ã‚³ãƒ³è‡ªä½“ã‚’ã‚¯ãƒªãƒƒã‚¯å¯èƒ½ãƒœã‚¿ãƒ³ã¨ã—ã¦ç›´æŽ¥é…ç½®
     MakeCloseButton(panel, function() Library:CloseHistoryPanel() end, 502)
 
     local scroll = Instance.new("ScrollingFrame")
@@ -17494,7 +17439,7 @@ function Library:ToggleHistoryPanel()
     if History.PanelOpen then Library:CloseHistoryPanel() else Library:OpenHistoryPanel() end
 end
 
--- ═══ ④ 確認ダイアログ（X付） ═══
+-- â•â•â• â‘£ ç¢ºèªãƒ€ã‚¤ã‚¢ãƒ­ã‚°ï¼ˆXä»˜ï¼‰ â•â•â•
 local function CreateConfirmDialog()
     if History.Dialog and History.Dialog.Parent then return History.Dialog end
     local dialog = Instance.new("Frame")
@@ -17511,7 +17456,7 @@ local function CreateConfirmDialog()
     st.Color = Library.Scheme.OutlineColor or Color3.fromRGB(60, 60, 60)
     st.Thickness = 1
 
-    -- ★ X 修正: アイコン自体をクリック可能ボタンとして直接配置
+    -- â˜… X ä¿®æ­£: ã‚¢ã‚¤ã‚³ãƒ³è‡ªä½“ã‚’ã‚¯ãƒªãƒƒã‚¯å¯èƒ½ãƒœã‚¿ãƒ³ã¨ã—ã¦ç›´æŽ¥é…ç½®
     MakeCloseButton(dialog, function() dialog.Visible = false end, 1003)
 
     local FFace = Library.Scheme.Font or Font.fromEnum(Enum.Font.Code)
@@ -17590,7 +17535,7 @@ function Library:CloseScript()
     end
 end
 
--- ═══ ⑤ タブアイコン回転（v5復活） ═══
+-- â•â•â• â‘¤ ã‚¿ãƒ–ã‚¢ã‚¤ã‚³ãƒ³å›žè»¢ï¼ˆv5å¾©æ´»ï¼‰ â•â•â•
 local ActiveSpins = setmetatable({}, { __mode = "k" })
 
 local function GetTabIconForSpin(Tab)
@@ -17670,7 +17615,7 @@ end)
 
 function Library:RefreshTabIconSpin() RefreshSpins() end
 
--- ═══ ⑥ タブ縦線インジケータ ═══
+-- â•â•â• â‘¥ ã‚¿ãƒ–ç¸¦ç·šã‚¤ãƒ³ã‚¸ã‚±ãƒ¼ã‚¿ â•â•â•
 local TabIndicators = setmetatable({}, { __mode = "k" })
 local function GetAccent() return Library.Scheme.AccentColor or Color3.fromRGB(125, 85, 255) end
 
@@ -17684,7 +17629,7 @@ local function EnsureIndicator(Tab)
     ind.BackgroundColor3 = GetAccent()
     ind.BorderSizePixel = 0
     ind.AnchorPoint = Vector2.new(0, 0.5)
-    ind.Position = UDim2.new(0, 4, 0.5, 0)   -- 右に 4px
+    ind.Position = UDim2.new(0, 4, 0.5, 0)   -- å³ã« 4px
     ind.Size = UDim2.new(0, 2, 1, -8)
     ind.ZIndex = (btn.ZIndex or 1) + 5
     ind.Visible = false
@@ -17723,7 +17668,7 @@ end)
 
 function Library:RefreshTabIndicators() UpdateIndicators() end
 
--- ═══ ⑦ Footer マーキー ═══
+-- â•â•â• â‘¦ Footer ãƒžãƒ¼ã‚­ãƒ¼ â•â•â•
 local FM = { Active = false, Conn = nil, Clip = nil, Label = nil, X = 0, W = 0, PW = 0 }
 
 local function StopFM()
@@ -17825,7 +17770,7 @@ end)
 
 function Library:RefreshFooterMarquee() StopFM(); local l = FindFooterLabel(); if l then SetupFM(l) end end
 function Library:StopFooterMarquee() StopFM() end
--- ═══ Window 白外枠グラデーション ═══
+-- â•â•â• Window ç™½å¤–æž ã‚°ãƒ©ãƒ‡ãƒ¼ã‚·ãƒ§ãƒ³ â•â•â•
 Library.WindowGlow = Library.WindowGlow or {
     Enabled = true,
     Color = Color3.new(1, 1, 1),
@@ -17886,7 +17831,7 @@ end)
 
 function Library:RefreshWindowGlow() AttachGlow() end
 function Library:StopWindowGlow() RemoveGlow() end
--- ═══ Toggle / Lock 四角いカスタムボタン化 (v26) ═══
+-- â•â•â• Toggle / Lock å››è§’ã„ã‚«ã‚¹ã‚¿ãƒ ãƒœã‚¿ãƒ³åŒ– (v26) â•â•â•
 task.spawn(function()
     local waitT = 0
     while not Library.Unloaded and waitT < 200 do
@@ -17895,31 +17840,31 @@ task.spawn(function()
     end
     task.wait(1)
 
-    -- 元のボタンを削除
+    -- å…ƒã®ãƒœã‚¿ãƒ³ã‚’å‰Šé™¤
     for _, desc in ipairs(Library.Floats:GetDescendants()) do
         if desc:IsA("TextButton") and (desc.Text:lower():find("toggle") or desc.Text:lower():find("lock")) then
             desc:Destroy()
         end
     end
 
-    -- コンテナ作成（縦並び用に高さを確保）
+    -- ã‚³ãƒ³ãƒ†ãƒŠä½œæˆï¼ˆç¸¦ä¸¦ã³ç”¨ã«é«˜ã•ã‚’ç¢ºä¿ï¼‰
     local container = Instance.new("Frame")
     container.Name = "_CustomActionButtons"
     container.BackgroundTransparency = 1
     container.Position = UDim2.fromOffset(10, 10)
-    container.Size = UDim2.fromOffset(30, 70) -- 縦に2つ並ぶサイズ
+    container.Size = UDim2.fromOffset(30, 70) -- ç¸¦ã«2ã¤ä¸¦ã¶ã‚µã‚¤ã‚º
     container.Parent = Library.Floats
 
-    -- 縦並びレイアウト設定
+    -- ç¸¦ä¸¦ã³ãƒ¬ã‚¤ã‚¢ã‚¦ãƒˆè¨­å®š
     local layout = Instance.new("UIListLayout", container)
-    layout.FillDirection = Enum.FillDirection.Vertical -- 縦方向に変更
+    layout.FillDirection = Enum.FillDirection.Vertical -- ç¸¦æ–¹å‘ã«å¤‰æ›´
     layout.Padding = UDim.new(0, 10)
     layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
     layout.SortOrder = Enum.SortOrder.LayoutOrder
 
     Library:MakeDraggable(container, container, true)
 
-    -- 四角いボタン作成
+    -- å››è§’ã„ãƒœã‚¿ãƒ³ä½œæˆ
     local function CreateSquareButton(order)
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.fromOffset(30, 30)
@@ -17948,14 +17893,14 @@ task.spawn(function()
         return btn, img
     end
 
-    -- Eye (上) と Lock (下) を生成
+    -- Eye (ä¸Š) ã¨ Lock (ä¸‹) ã‚’ç”Ÿæˆ
     local toggleBtn, toggleIcon = CreateSquareButton(1)
     toggleBtn.Parent = container
     
     local lockBtn, lockIcon = CreateSquareButton(2)
     lockBtn.Parent = container
 
-    -- アイコン適用
+    -- ã‚¢ã‚¤ã‚³ãƒ³é©ç”¨
     local function ApplyIcon(imgLabel, iconName)
         local data = Library:GetIcon(iconName)
         if not data then
@@ -17972,11 +17917,11 @@ task.spawn(function()
         end
     end
 
-    -- 初期アイコン
+    -- åˆæœŸã‚¢ã‚¤ã‚³ãƒ³
     ApplyIcon(toggleIcon, "eye")
     ApplyIcon(lockIcon, "lock-keyhole-open")
 
-    -- クリックイベント
+    -- ã‚¯ãƒªãƒƒã‚¯ã‚¤ãƒ™ãƒ³ãƒˆ
     toggleBtn.MouseButton1Click:Connect(function()
         if typeof(Library.Toggle) == "function" then
             Library:Toggle()
@@ -17994,13 +17939,13 @@ task.spawn(function()
         Library.CantDragForced = not Library.CantDragForced
     end)
 
-    -- 状態監視とアイコン切り替え
+    -- çŠ¶æ…‹ç›£è¦–ã¨ã‚¢ã‚¤ã‚³ãƒ³åˆ‡ã‚Šæ›¿ãˆ
     local lastToggled, lastLocked
     Library:GiveSignal(RunService.Heartbeat:Connect(function()
         local isVisible = Library.Toggled
         if isVisible ~= lastToggled then
             lastToggled = isVisible
-            -- 順番を反対に（表示中はeye、非表示はeye-off）
+            -- é †ç•ªã‚’åå¯¾ã«ï¼ˆè¡¨ç¤ºä¸­ã¯eyeã€éžè¡¨ç¤ºã¯eye-offï¼‰
             ApplyIcon(toggleIcon, isVisible and "eye" or "eye-off")
         end
 
@@ -18011,5 +17956,4 @@ task.spawn(function()
         end
     end))
 end)
-
 return Library
