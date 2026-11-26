@@ -17068,7 +17068,7 @@ Library.NotifHistory = Library.NotifHistory or {
 }
 Library.SearchBarButtonSize = Library.SearchBarButtonSize or 16
 Library.SearchBarButtonGap  = Library.SearchBarButtonGap  or 3
-Library.FooterMarquee = Library.FooterMarquee or { Enabled = true, Speed = 60, Gap = 80 }
+Library.FooterMarquee = Library.FooterMarquee or { Enabled = false, Speed = 60, Gap = 80 }
 Library.TabIconSpin = Library.TabIconSpin or {
     Enabled = true, Duration = 2.0,
     Style = Enum.EasingStyle.Linear, Direction = Enum.EasingDirection.Out, ActiveOnly = true,
@@ -17678,22 +17678,21 @@ local function FindFooterLabel()
     local sg = Library.ScreenGui
     if not sg then return nil end
     local txt = Library.Window and Library.Window.Footer
-    local exact, partial, named, bottom
-    local bottomY = -math.huge
+    local exact, partial, named
     for _, D in sg:GetDescendants() do
         if D:IsA("TextLabel") and D.Visible and D.Text ~= "" then
             local p = D.Parent
             if p and p.Name == "_FMClip" then return D end
+            -- Only real footer text. Never fall back to the lowest TextLabel
+            -- (that incorrectly picked toggle labels and scrolled them).
             if typeof(txt) == "string" and txt ~= "" then
                 if D.Text == txt then exact = exact or D end
                 if not partial and D.Text:find(txt, 1, true) then partial = D end
             end
             if not named and string.lower(D.Name):find("footer") then named = D end
-            local ay = D.AbsolutePosition.Y
-            if ay > bottomY then bottomY = ay; bottom = D end
         end
     end
-    return exact or partial or named or bottom
+    return exact or partial or named
 end
 
 local function SetupFM(label)
