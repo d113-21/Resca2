@@ -17463,4 +17463,56 @@ task.spawn(function()
         end
     end))
 end)
+
+do
+    local OriginalCreateWindow = Library.CreateWindow
+    if OriginalCreateWindow then
+        function Library:CreateWindow(WindowInfo)
+            WindowInfo = WindowInfo or {}
+            --// Back-compat aliases (doihi option names -> remote/current behaviour) \\--
+            if WindowInfo.Compact ~= nil and WindowInfo.SidebarCompacted == nil then
+                WindowInfo.SidebarCompacted = WindowInfo.Compact
+            end
+            local Window = OriginalCreateWindow(self, WindowInfo)
+            if Window then
+                if Window.SetBackgroundImageEnabled == nil then
+                    function Window:SetBackgroundImageEnabled(State: boolean)
+                        return Library:SetBackgroundImageEnabled(State)
+                    end
+                end
+                if Window.SetBackgroundImage == nil then
+                    function Window:SetBackgroundImage(Image: string)
+                        return Library:SetBackgroundImage(Image)
+                    end
+                end
+                --// AddSpecialTab compat: delegate to AddTab (remote tab system) \\--
+                if Window.AddSpecialTab == nil and Window.AddTab ~= nil then
+                    function Window:AddSpecialTab(...)
+                        local Name, Icon, Description = nil, nil, nil
+                        if select("#", ...) == 1 and typeof(...) == "table" then
+                            local Info = select(1, ...)
+                            Name = Info.Name or "Tab"
+                            Icon = Info.Icon
+                            Description = Info.Description or "No Description"
+                        else
+                            Name = select(1, ...) or "Tab"
+                            Icon = select(2, ...)
+                            Description = select(3, ...) or "No Description"
+                        end
+                        return Window:AddTab(Name, Icon, Description)
+                    end
+                end
+                --// Apply initial doihi visual options if caller passed them \\--
+                pcall(function()
+                    if WindowInfo.BackgroundImage and WindowInfo.BackgroundImage ~= "" then
+                        Library:SetBackgroundImage(WindowInfo.BackgroundImage)
+                        Library:SetBackgroundImageEnabled(true)
+                    end
+                end)
+            end
+            return Window
+        end
+    end
+end
+
 return Library
