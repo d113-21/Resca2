@@ -15517,207 +15517,6 @@ function Library:CreateWindow(WindowInfo)
         return Dialog
     end
 
-    function Window:Toggle(Value: boolean?)
-        if Fading then
-            return
-        end
-
-        --// Window is still expanding; ignore hotkey toggles until reveal finishes
-        if SplashState == 1 then
-            return
-        end
-
-        if Library.ActiveLoading then
-            if Value == true then
-                return
-            end
-
-            if not Library.Toggled then
-                return
-            end
-        end
-
-        if typeof(Value) == "boolean" then
-            Library.Toggled = Value
-        else
-            Library.Toggled = not Library.Toggled
-        end
-
-        --// First reveal: play the dedicated splash overlay
-        local SplashDeferred = false
-        if Library.Toggled and SplashState == 0 then
-            if Minimized or (WindowInfo.AutoMinimize and WindowInfo.Minimizable) then
-                SplashState = 3
-            else
-                SplashState = 1
-                SplashDeferred = true
-                print("[splash] toggle defer: SplashState = 1, calling StartStartupSplash")
-                StartStartupSplash()
-            end
-        elseif not Library.Toggled and SplashState == 1 then
-            print("[splash] toggle closed during splash: dismissing")
-            pcall(DismissStartupSplash)
-        end
-
-        if SplashDeferred then
-            -- splash owns the first show; skip normal fade/visibility path
-        elseif Library.Animations and Library.Animations.ToggleWindow == true then
-            local Toggled = Library.Toggled
-            Fading = true
-
-            local FadeGroup = New("CanvasGroup", {
-                BackgroundTransparency = 1,
-                GroupTransparency = Toggled and 1 or 0,
-                Name = "MainFade",
-                Size = UDim2.fromScale(1, 1),
-                ZIndex = MainFrame.ZIndex,
-                Parent = ScreenGui,
-            })
-
-            MainFrame.Visible = true
-            MainFrame.Parent = FadeGroup
-
-            task.spawn(function()
-                RunService.Heartbeat:Wait()
-                RunService.Heartbeat:Wait()
-
-                TweenService:Create(FadeGroup, Library.WindowAnimationInfo, { GroupTransparency = Toggled and 0 or 1 }):Play()
-                task.wait(Library.WindowAnimationInfo.Time)
-
-                Fading = false
-                if Library.Unloaded then
-                    return
-                end
-
-                MainFrame.Visible = Library.Toggled
-                MainFrame.Parent = ScreenGui
-                FadeGroup:Destroy()
-            end)
-        else
-            MainFrame.Visible = Library.Toggled
-        end
-
-        if WindowInfo.UnlockMouseWhileOpen then
-            ModalElement.Modal = Library.Toggled
-        end
-
-        if Library.Toggled and not Library.IsMobile then
-            local ShowCursorBinding = Library.ShowCursorBinding
-            Library.OriginalMouseIconEnabled = UserInputService.MouseIconEnabled
-
-            pcall(function() RunService:UnbindFromRenderStep(ShowCursorBinding) end)
-            RunService:BindToRenderStep(ShowCursorBinding, Enum.RenderPriority.Last.Value, function()
-                UserInputService.MouseIconEnabled = not Library.ShowCustomCursor
-
-                Cursor.Position = UDim2.fromOffset(Mouse.X, Mouse.Y)
-                Cursor.Visible = Library.ShowCustomCursor
-
-                if Library.Unloaded == true or not (Library.Toggled and ScreenGui and ScreenGui.Parent) then
-                    RestoreMouseIcon()
-                end
-            end)
-        elseif not Library.Toggled then
-            RestoreMouseIcon()
-            TooltipLabel.Visible = false
-
-            CloseMenus()
-        end
-    end
-
-    function Library:Toggle(Value: boolean?)
-        return Window:Toggle(Value)
-    end
-
-    if WindowInfo.EnableSidebarResize then
-        local Threshold = (WindowInfo.MinSidebarWidth + WindowInfo.SidebarCompactWidth) * WindowInfo.SidebarCollapseThreshold
-        local StartPos, StartWidth
-        local Dragging = false
-        local Changed
-
-        local SidebarGrabber = New("TextButton", {
-            AnchorPoint = Vector2.new(0.5, 0),
-            BackgroundTransparency = 1,
-            Position = UDim2.fromScale(0.5, 0),
-            Size = UDim2.new(0, 8, 1, 0),
-            Text = "",
-            Parent = DividerLine,
-        })
-        SidebarGrabber.MouseEnter:Connect(function()
-            TweenService:Create(DividerLine, Library.TweenInfo, {
-                BackgroundColor3 = Library:GetLighterColor(Library.Scheme.OutlineColor),
-            }):Play()
-        end)
-        SidebarGrabber.MouseLeave:Connect(function()
-            if Dragging then
-                return
-            end
-            TweenService:Create(DividerLine, Library.TweenInfo, {
-                BackgroundColor3 = Library.Scheme.OutlineColor,
-            }):Play()
-        end)
-
-        SidebarGrabber.InputBegan:Connect(function(Input: InputObject)
-            if not IsClickInput(Input) then
-                return
-            end
-
-            Library.CantDragForced = true
-
-            StartPos = Input.Position
-            StartWidth = Window:GetSidebarWidth()
-            Dragging = true
-
-            Changed = Input.Changed:Connect(function()
-                if Input.UserInputState ~= Enum.UserInputState.End then
-                    return
-                end
-
-                Library.CantDragForced = false
-                TweenService:Create(DividerLine, Library.TweenInfo, {
-                    BackgroundColor3 = Library.Scheme.OutlineColor,
-                }):Play()
-
-                Dragging = false
-                if Changed and Changed.Connected then
-                    Changed:Disconnect()
-                    Changed = nil
-                end
-            end)
-        end)
-
-        Library:GiveSignal(UserInputService.InputChanged:Connect(function(Input: InputObject)
-            if not Library.Toggled or not (ScreenGui and ScreenGui.Parent) then
-                Dragging = false
-                if Changed and Changed.Connected then
-                    Changed:Disconnect()
-                    Changed = nil
-                end
-
-                return
-            end
-
-            if Dragging and IsHoverInput(Input) then
-                local Delta = Input.Position - StartPos
-                local Width = StartWidth + Delta.X
-
-                if WindowInfo.DisableCompactingSnap then
-                    Window:SetSidebarWidth(Width)
-                    return
-                end
-
-                if Width > Threshold then
-                    Window:SetSidebarWidth(math.max(Width, WindowInfo.MinSidebarWidth))
-                else
-                    Window:SetSidebarWidth(WindowInfo.SidebarCompactWidth)
-                end
-            end
-        end))
-    end
-
-    Window:SetAlwaysOnTop(WindowInfo.AlwaysOnTop)
-    if WindowInfo.EnableCompacting and WindowInfo.SidebarCompacted then
-        Window:SetSidebarWidth(WindowInfo.SidebarCompactWidth)
-    end
     local Minimized = false
     local MiniFrame = nil
 
@@ -16154,7 +15953,207 @@ function Library:CreateWindow(WindowInfo)
         end)
     end
 
+    function Window:Toggle(Value: boolean?)
+        if Fading then
+            return
+        end
 
+        --// Window is still expanding; ignore hotkey toggles until reveal finishes
+        if SplashState == 1 then
+            return
+        end
+
+        if Library.ActiveLoading then
+            if Value == true then
+                return
+            end
+
+            if not Library.Toggled then
+                return
+            end
+        end
+
+        if typeof(Value) == "boolean" then
+            Library.Toggled = Value
+        else
+            Library.Toggled = not Library.Toggled
+        end
+
+        --// First reveal: play the dedicated splash overlay
+        local SplashDeferred = false
+        if Library.Toggled and SplashState == 0 then
+            if Minimized or (WindowInfo.AutoMinimize and WindowInfo.Minimizable) then
+                SplashState = 3
+            else
+                SplashState = 1
+                SplashDeferred = true
+                print("[splash] toggle defer: SplashState = 1, calling StartStartupSplash")
+                StartStartupSplash()
+            end
+        elseif not Library.Toggled and SplashState == 1 then
+            print("[splash] toggle closed during splash: dismissing")
+            pcall(DismissStartupSplash)
+        end
+
+        if SplashDeferred then
+            -- splash owns the first show; skip normal fade/visibility path
+        elseif Library.Animations and Library.Animations.ToggleWindow == true then
+            local Toggled = Library.Toggled
+            Fading = true
+
+            local FadeGroup = New("CanvasGroup", {
+                BackgroundTransparency = 1,
+                GroupTransparency = Toggled and 1 or 0,
+                Name = "MainFade",
+                Size = UDim2.fromScale(1, 1),
+                ZIndex = MainFrame.ZIndex,
+                Parent = ScreenGui,
+            })
+
+            MainFrame.Visible = true
+            MainFrame.Parent = FadeGroup
+
+            task.spawn(function()
+                RunService.Heartbeat:Wait()
+                RunService.Heartbeat:Wait()
+
+                TweenService:Create(FadeGroup, Library.WindowAnimationInfo, { GroupTransparency = Toggled and 0 or 1 }):Play()
+                task.wait(Library.WindowAnimationInfo.Time)
+
+                Fading = false
+                if Library.Unloaded then
+                    return
+                end
+
+                MainFrame.Visible = Library.Toggled
+                MainFrame.Parent = ScreenGui
+                FadeGroup:Destroy()
+            end)
+        else
+            MainFrame.Visible = Library.Toggled
+        end
+
+        if WindowInfo.UnlockMouseWhileOpen then
+            ModalElement.Modal = Library.Toggled
+        end
+
+        if Library.Toggled and not Library.IsMobile then
+            local ShowCursorBinding = Library.ShowCursorBinding
+            Library.OriginalMouseIconEnabled = UserInputService.MouseIconEnabled
+
+            pcall(function() RunService:UnbindFromRenderStep(ShowCursorBinding) end)
+            RunService:BindToRenderStep(ShowCursorBinding, Enum.RenderPriority.Last.Value, function()
+                UserInputService.MouseIconEnabled = not Library.ShowCustomCursor
+
+                Cursor.Position = UDim2.fromOffset(Mouse.X, Mouse.Y)
+                Cursor.Visible = Library.ShowCustomCursor
+
+                if Library.Unloaded == true or not (Library.Toggled and ScreenGui and ScreenGui.Parent) then
+                    RestoreMouseIcon()
+                end
+            end)
+        elseif not Library.Toggled then
+            RestoreMouseIcon()
+            TooltipLabel.Visible = false
+
+            CloseMenus()
+        end
+    end
+
+    function Library:Toggle(Value: boolean?)
+        return Window:Toggle(Value)
+    end
+
+    if WindowInfo.EnableSidebarResize then
+        local Threshold = (WindowInfo.MinSidebarWidth + WindowInfo.SidebarCompactWidth) * WindowInfo.SidebarCollapseThreshold
+        local StartPos, StartWidth
+        local Dragging = false
+        local Changed
+
+        local SidebarGrabber = New("TextButton", {
+            AnchorPoint = Vector2.new(0.5, 0),
+            BackgroundTransparency = 1,
+            Position = UDim2.fromScale(0.5, 0),
+            Size = UDim2.new(0, 8, 1, 0),
+            Text = "",
+            Parent = DividerLine,
+        })
+        SidebarGrabber.MouseEnter:Connect(function()
+            TweenService:Create(DividerLine, Library.TweenInfo, {
+                BackgroundColor3 = Library:GetLighterColor(Library.Scheme.OutlineColor),
+            }):Play()
+        end)
+        SidebarGrabber.MouseLeave:Connect(function()
+            if Dragging then
+                return
+            end
+            TweenService:Create(DividerLine, Library.TweenInfo, {
+                BackgroundColor3 = Library.Scheme.OutlineColor,
+            }):Play()
+        end)
+
+        SidebarGrabber.InputBegan:Connect(function(Input: InputObject)
+            if not IsClickInput(Input) then
+                return
+            end
+
+            Library.CantDragForced = true
+
+            StartPos = Input.Position
+            StartWidth = Window:GetSidebarWidth()
+            Dragging = true
+
+            Changed = Input.Changed:Connect(function()
+                if Input.UserInputState ~= Enum.UserInputState.End then
+                    return
+                end
+
+                Library.CantDragForced = false
+                TweenService:Create(DividerLine, Library.TweenInfo, {
+                    BackgroundColor3 = Library.Scheme.OutlineColor,
+                }):Play()
+
+                Dragging = false
+                if Changed and Changed.Connected then
+                    Changed:Disconnect()
+                    Changed = nil
+                end
+            end)
+        end)
+
+        Library:GiveSignal(UserInputService.InputChanged:Connect(function(Input: InputObject)
+            if not Library.Toggled or not (ScreenGui and ScreenGui.Parent) then
+                Dragging = false
+                if Changed and Changed.Connected then
+                    Changed:Disconnect()
+                    Changed = nil
+                end
+
+                return
+            end
+
+            if Dragging and IsHoverInput(Input) then
+                local Delta = Input.Position - StartPos
+                local Width = StartWidth + Delta.X
+
+                if WindowInfo.DisableCompactingSnap then
+                    Window:SetSidebarWidth(Width)
+                    return
+                end
+
+                if Width > Threshold then
+                    Window:SetSidebarWidth(math.max(Width, WindowInfo.MinSidebarWidth))
+                else
+                    Window:SetSidebarWidth(WindowInfo.SidebarCompactWidth)
+                end
+            end
+        end))
+    end
+
+    Window:SetAlwaysOnTop(WindowInfo.AlwaysOnTop)
+    if WindowInfo.EnableCompacting and WindowInfo.SidebarCompacted then
+        Window:SetSidebarWidth(WindowInfo.SidebarCompactWidth)
+    end
     --// Show the startup icon immediately; the rest of the window is built
     --// behind it, so the user gets instant feedback instead of a blank screen
     if WindowInfo.AutoShow and not Library.ActiveLoading and not (WindowInfo.AutoMinimize and WindowInfo.Minimizable) then
@@ -16163,7 +16162,6 @@ function Library:CreateWindow(WindowInfo)
     else
         print("[splash] early build skipped (AutoShow=" .. tostring(WindowInfo.AutoShow) .. " ActiveLoading=" .. tostring(Library.ActiveLoading) .. " AutoMinimize=" .. tostring(WindowInfo.AutoMinimize) .. ")")
     end
-
 
     if WindowInfo.AutoShow and not Library.ActiveLoading then
         task.spawn(Library.Toggle)
